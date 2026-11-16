@@ -317,3 +317,21 @@ export function warmups(ex, weight) {
     .map(([p, r]) => ({ w: roundTo(weight * p, step), r }))
     .filter((s, i, a) => s.w > 0 && (i === 0 || s.w !== a[i - 1].w));
 }
+
+// ---------- intensity techniques ----------
+// sub: the kind of extra row the technique adds after the working set.
+// rest: seconds between those rows. rows: how many to add. reps: default reps per extra row.
+export const TECHNIQUES = {
+  drop: { label: 'Drop set', short: 'Drop set', sub: true, rows: 1, rest: 0, pct: 25, desc: 'At failure, strip ~25% of the weight and go again with no rest.' },
+  mech: { label: 'Mechanical drop set', short: 'Mech drop', sub: true, rows: 1, rest: 0, desc: 'At failure, keep the weight and switch to an easier position or shorter range (e.g. incline → flat, full → partial).' },
+  myo: { label: 'Myo-reps', short: 'Myo-reps', sub: true, rows: 3, rest: 15, reps: 4, desc: 'Activation set near failure, then mini-sets of ~4 reps with 15 sec rest until you can’t get 4.' },
+  rp: { label: 'Rest-pause', short: 'Rest-pause', sub: true, rows: 2, rest: 15, desc: 'Go to failure, rest 15 sec, go to failure again. Repeat once more.' },
+  cluster: { label: 'Cluster set', short: 'Cluster', sub: true, rows: 2, rest: 20, reps: 2, desc: 'Break one heavy set into mini-sets with 15–20 sec between them (e.g. 3 + 2 + 2).' },
+  partials: { label: 'Lengthened partials', short: 'Partials', sub: true, rows: 1, rest: 0, desc: 'At failure, keep going with partial reps in the stretched half of the range. Log the partial reps.' },
+  failure: { label: 'Take to failure', short: 'Failure', desc: 'Last rep you can complete with good form. Use on the last set, mostly on machines and cables.' },
+  eccentric: { label: 'Slow eccentric (3–4 sec)', short: 'Slow ecc', desc: 'Lower the weight over 3–4 seconds on every rep.' },
+  pause: { label: 'Stretch pause', short: 'Stretch pause', desc: 'Pause 1–2 sec in the deepest stretch on every rep, no bounce.' },
+  onehalf: { label: '1½ reps', short: '1½ reps', desc: 'Full rep plus a half rep in the stretched range counts as one.' },
+  superset: { label: 'Superset next exercise', short: 'Superset', desc: 'Go straight to the next exercise without resting.' },
+};
+export const techOf = key => TECHNIQUES[key] || null;

@@ -104,7 +104,7 @@ function history(exId) {
   for (let i = state.sessions.length - 1; i >= 0; i--) {
     const s = state.sessions[i];
     for (const sl of s.slots) if (sl.ex === exId) {
-      const sets = sl.log.filter(x => x.done && x.r).map(x => ({ w: x.w === '' || x.w == null ? null : +x.w, r: +x.r }));
+      const sets = sl.log.filter(x => x.done && x.r && !x.sub).map(x => ({ w: x.w === '' || x.w == null ? null : +x.w, r: +x.r }));
       if (sets.length) out.push({ date: s.date, sets });
     }
   }
@@ -228,11 +228,13 @@ function ratingCard(r, { title = 'Workout rating', compact = false } = {}) {
   </section>`;
 }
 
+const ALL_SETS_TECH = new Set(['eccentric', 'pause', 'onehalf']);
 const restText = s => (s.rest ? `${s.rest}s rest` : 'no rest, go to next');
 const groupTag = s => (s.group ? `<span class="chip grp">${esc(s.group)}</span> ` : '');
 // Technique and coaching cues carried over from an imported program.
 function slotExtras(s) {
-  const tech = s.tech ? `<div class="tech">◆ ${esc(s.tech)}</div>` : '';
+  const T = E.techOf(s.intensity?.t);
+  const tech = s.tech ? `<div class="tech">◆ ${esc(s.tech)}</div>` : T ? `<div class="tech">◆ ${esc(T.label)} (${s.intensity.on === 'all' ? 'all sets' : s.intensity.on === 'first' ? 'first set' : 'last set'})</div>` : '';
   const note = s.note ? `<details class="cue"><summary>Cues</summary><p>${esc(s.note)}</p></details>` : '';
   return tech + note;
 }
@@ -255,7 +257,11 @@ function slotList(slots, where, { editable = true } = {}) {
           ${editable ? `
           <span class="stepper"><button data-act="sets" data-d="-1" data-where="${where}" data-i="${i}" aria-label="Fewer sets">−</button>${s.sets} sets<button data-act="sets" data-d="1" data-where="${where}" data-i="${i}" aria-label="More sets">+</button></span>
           <span class="reps"><input inputmode="numeric" data-field="rlo" data-where="${where}" data-i="${i}" value="${s.reps[0]}">–<input inputmode="numeric" data-field="rhi" data-where="${where}" data-i="${i}" value="${s.reps[1]}"> ${esc(u)}</span>
-          <span class="reps"><input inputmode="numeric" data-field="rest" data-where="${where}" data-i="${i}" value="${s.rest}">s rest</span>`
+          <span class="reps"><input inputmode="numeric" data-field="rest" data-where="${where}" data-i="${i}" value="${s.rest}">s rest</span>
+          <label class="reps">Technique <select data-field="intensity" data-where="${where}" data-i="${i}">
+            <option value="">None</option>
+            ${Object.entries(E.TECHNIQUES).map(([k, T]) => `<option value="${k}" ${s.intensity?.t === k ? 'selected' : ''}>${esc(T.label)}${ALL_SETS_TECH.has(k) ? ' (all sets)' : ' (last set)'}</option>`).join('')}
+          </select></label>`
           : `<span>${s.sets} × ${E.fmtRange(s.reps)} ${esc(u)}</span><span>${restText(s)}</span>`}
         </div>
         <div class="slot-tags">${esc(PATTERNS[ex.pattern] || ex.pattern)} · ${Object.entries(ex.muscles).filter(([, w]) => w >= 1).map(([m]) => MUSCLES[m]).join(', ')}</div>
@@ -358,10 +364,10 @@ function viewActive() {
   const a = state.active;
   const L = lib();
   const week = currentWeek(a.programId);
-  const r = E.rateSession(a.slots.map(s => ({ ...s, sets: s.log.length })), L, a.focus);
+  const r = E.rateSession(a.slots.map(s => ({ ...s, sets: mainSets(s.log).length })), L, a.focus);
   const elapsed = Math.floor((Date.now() - a.startedAt) / 60000);
-  const doneSets = a.slots.reduce((n, s) => n + s.log.filter(x => x.done).length, 0);
-  const totalSets = a.slots.reduce((n, s) => n + s.log.length, 0);
+  const doneSets = a.slots.reduce((n, s) => n + mainSets(s.log).filter(x => x.done).length, 0);
+  const totalSets = a.slots.reduce((n, s) => n + mainSets(s.log).length, 0);
 
   const cards = a.slots.map((s, i) => {
     const ex = L[s.ex];
@@ -371,6 +377,7 @@ function viewActive() {
     const workW = s.log.find(x => x.w !== '' && x.w != null)?.w || s.suggest?.weight;
     const wu = E.warmups(ex, +workW);
     const allDone = s.log.length && s.log.every(x => x.done);
+    let n = 0;
     return `
     <section class="card ex-card ${allDone ? 'done' : ''}" id="ex-${i}">
       <div class="ex-head">
@@ -386,14 +393,21 @@ function viewActive() {
       ${wu.length ? `<div class="warmup"><span>Warm-up</span>${wu.map(w => `<b>${fmtW(w.w)}×${w.r}</b>`).join('')}</div>` : ''}
       <div class="sets">
         <div class="set-row head"><span>Set</span><span>${unit()}</span><span>${esc(u[0].toUpperCase() + u.slice(1))}</span><span></span></div>
-        ${s.log.map((x, j) => `
-        <div class="set-row ${x.done ? 'is-done' : ''}">
-          <span class="set-n">${j + 1}</span>
-          <input inputmode="decimal" data-field="w" data-i="${i}" data-j="${j}" value="${x.w ?? ''}" placeholder="${s.suggest?.weight ?? '—'}">
-          <input inputmode="numeric" data-field="r" data-i="${i}" data-j="${j}" value="${x.r ?? ''}" placeholder="${s.suggest?.reps ?? ''}">
+        ${s.log.map((x, j) => {
+          const T = E.techOf(x.sub || x.t);
+          const label = x.sub ? `<span class="set-n sub" title="${esc(T?.label || '')}">${esc(T?.short || x.sub)}</span>`
+            : `<button class="set-n tap ${x.t ? 'has-t' : ''}" data-act="set-tech" data-i="${i}" data-j="${j}" aria-label="Set ${n + 1} technique">${++n}</button>`;
+          const rph = x.sub ? (T?.reps ?? '') : (s.suggest?.reps ?? '');
+          return `
+        <div class="set-row ${x.done ? 'is-done' : ''} ${x.sub ? 'sub-row' : ''}">
+          ${label}
+          <input inputmode="decimal" data-field="w" data-i="${i}" data-j="${j}" value="${x.w ?? ''}" placeholder="${x.sub ? '' : s.suggest?.weight ?? '—'}">
+          <input inputmode="numeric" data-field="r" data-i="${i}" data-j="${j}" value="${x.r ?? ''}" placeholder="${rph}">
           <button class="check ${x.done ? 'on' : ''}" data-act="done" data-i="${i}" data-j="${j}" aria-label="Complete set">✓</button>
-        </div>`).join('')}
+        </div>${!x.sub && T ? `<div class="set-tech"><span class="chip grp">${esc(T.short)}</span> <span class="muted">${esc(x.t === 'drop' ? `Strip ~${x.pct || T.pct}% and go again, no rest` : T.desc)}</span></div>` : ''}`;
+        }).join('')}
       </div>
+      <p class="muted small set-hint">Tap a set number to add a drop set, myo-reps, rest-pause and more.</p>
       <div class="row-btns">
         <button class="btn sm ghost" data-act="add-set" data-i="${i}">+ Set</button>
         <button class="btn sm ghost" data-act="del-set" data-i="${i}">− Set</button>
@@ -560,7 +574,7 @@ function viewProgress() {
 
   const weekAgo = Date.now() - 7 * 864e5;
   const recent = state.sessions.filter(s => s.finishedAt > weekAgo);
-  const weekSets = recent.reduce((n, s) => n + s.slots.reduce((m, sl) => m + sl.log.filter(x => x.done).length, 0), 0);
+  const weekSets = recent.reduce((n, s) => n + s.slots.reduce((m, sl) => m + sl.log.filter(x => x.done && !x.sub).length, 0), 0);
 
   let chart = '<p class="muted">Finish a workout to start tracking progress.</p>', table = '';
   if (ui.progressEx) {
@@ -597,7 +611,7 @@ function viewProgress() {
     ${state.sessions.slice().reverse().slice(0, 20).map(s => `
       <div class="hist-row">
         <span class="grade sm ${gradeClass(s.rating?.grade || 'D')}">${s.rating?.grade || '–'}</span>
-        <div class="day-name"><b>${esc(s.name)}</b><span class="muted">${esc(s.date)} · ${s.minutes ?? '?'} min · ${s.slots.reduce((n, sl) => n + sl.log.filter(x => x.done).length, 0)} sets</span></div>
+        <div class="day-name"><b>${esc(s.name)}</b><span class="muted">${esc(s.date)} · ${s.minutes ?? '?'} min · ${s.slots.reduce((n, sl) => n + sl.log.filter(x => x.done && !x.sub).length, 0)} sets</span></div>
         <button class="icon" data-act="del-session" data-id="${s.id}" aria-label="Delete workout">✕</button>
       </div>`).join('') || '<p class="muted">No workouts yet.</p>'}
   </section>`;
@@ -708,6 +722,19 @@ function sheetHTML() {
       <button class="btn block" data-act="video" data-ex="${s.ex}">Form videos</button>
       <button class="btn block" data-act="up" data-where="active" data-i="${sh.i}" data-close="1">Move up</button>
       <button class="btn block danger-ghost" data-act="remove-slot" data-where="active" data-i="${sh.i}" data-close="1">Remove exercise</button>`;
+  } else if (sh.type === 'set-tech') {
+    const s = state.active.slots[sh.i];
+    const x = s.log[sh.j];
+    const subs = (() => { let k = sh.j + 1, c = 0; while (s.log[k]?.sub) { k++; c++; } return c; })();
+    const cur = E.techOf(x.t);
+    body = `<h2>Set ${mainSets(s.log.slice(0, sh.j + 1)).length} · ${esc(L[s.ex]?.name || '')}</h2>
+      <p class="muted small">Pick a technique for this set. Extra rows (drops, mini-sets, partials) appear after you check the set off, with the right rest timer.</p>
+      <ul class="pick tech-pick">
+        <li><button data-act="pick-tech" data-t="" class="${!x.t ? 'on' : ''}"><span class="pick-name"><b>Straight set</b><span class="muted">No technique</span></span></button></li>
+        ${Object.entries(E.TECHNIQUES).map(([k, T]) => `<li><button data-act="pick-tech" data-t="${k}" class="${x.t === k ? 'on' : ''}"><span class="pick-name"><b>${esc(T.label)}</b><span class="muted">${esc(T.desc)}</span></span></button></li>`).join('')}
+      </ul>
+      ${cur?.sub ? `<button class="btn block" data-act="tech-more" data-d="1">+ Add another ${esc(cur.short.toLowerCase())} row</button>` : ''}
+      ${subs ? `<button class="btn block danger-ghost" data-act="tech-more" data-d="-1">− Remove a ${esc(cur?.short?.toLowerCase() || 'extra')} row</button>` : ''}`;
   } else if (sh.type === 'import') {
     body = `<h2>Import</h2>
       <p class="muted small">Paste a program from Claude or a full backup file.</p>
@@ -731,7 +758,7 @@ function sheetHTML() {
       ${sh.prs.length ? `<ul class="notes">${sh.prs.map(p => `<li>New best: ${esc(p)}</li>`).join('')}</ul>` : ''}
       <button class="btn primary block" data-act="close">Done</button>`;
   }
-  return `<div class="scrim" data-act="close"></div><div class="sheet" role="dialog" aria-modal="true"><div class="grabber"></div>${body}</div>`;
+  return `<div class="scrim" data-act="close"></div><div class="sheet" role="dialog" aria-modal="true"><div class="grabber"></div><button class="icon sheet-x" data-act="close" aria-label="Close">✕</button>${body}</div>`;
 }
 
 // ================= render =================
@@ -774,11 +801,47 @@ function startWorkout(slots, meta) {
   render({ keepScroll: false });
 }
 
+const mainSets = log => log.filter(x => !x.sub);
+// Insert the extra rows a technique needs right after working set j (once).
+function addTechRows(s, j, extra = null) {
+  const x = s.log[j];
+  const T = E.techOf(x.t);
+  if (!T?.sub) return;
+  let end = j + 1;
+  while (s.log[end]?.sub) end++;
+  const have = end - (j + 1);
+  const want = extra != null ? have + extra : Math.max(have, T.rows);
+  const ex = lib()[s.ex];
+  const base = +x.w || +s.suggest?.weight || 0;
+  const rows = [];
+  for (let k = have; k < want; k++) {
+    let w = x.w;
+    if (x.t === 'drop' && base) w = E.roundTo(base * Math.pow(1 - (x.pct || T.pct) / 100, k + 1), ex?.inc || 5);
+    rows.push({ w: w ?? '', r: '', done: false, sub: x.t });
+  }
+  s.log.splice(end, 0, ...rows);
+}
+// After finishing row j: rest inside a technique, or the normal rest once its rows are done.
+function restAfter(s, j) {
+  const x = s.log[j];
+  const next = s.log[j + 1];
+  if (next?.sub) return E.techOf(next.sub)?.rest ?? 0;
+  if (x.t === 'superset' || s.rest === 0) return 0;
+  return s.rest;
+}
+
 function withSuggestion(slot, week) {
   const ex = lib()[slot.ex];
   const sg = E.suggest(ex, slot, history(slot.ex), week);
   slot.suggest = sg;
   slot.log = Array.from({ length: sg.sets }, () => ({ w: sg.weight ?? '', r: '', done: false }));
+  // Program preset, e.g. { t: 'drop', on: 'last' } or { t: 'eccentric', on: 'all' }.
+  const it = slot.intensity;
+  if (it && E.techOf(it.t)) {
+    const n = slot.log.length;
+    const idx = it.on === 'all' ? [...Array(n).keys()] : it.on === 'first' ? [0] : [n - 1];
+    idx.forEach(j => { slot.log[j].t = it.t; if (it.pct) slot.log[j].pct = it.pct; });
+  }
   return slot;
 }
 
@@ -791,17 +854,17 @@ function finishWorkout() {
   const prs = [];
   for (const s of done) {
     if (E.repUnit(L[s.ex]) !== 'reps') continue;
-    const best = Math.max(0, ...s.log.filter(x => x.done && x.w && x.r).map(x => E.e1rm(+x.w, +x.r)));
+    const best = Math.max(0, ...s.log.filter(x => x.done && x.w && x.r && !x.sub).map(x => E.e1rm(+x.w, +x.r)));
     const prev = Math.max(0, ...history(s.ex).flatMap(h => h.sets.map(x => E.e1rm(x.w, x.r))));
     if (best && prev && best > prev) prs.push(`${L[s.ex].name} (e1RM ${Math.round(best)} ${unit()})`);
   }
-  const rating = E.rateSession(a.slots.map(s => ({ ...s, sets: s.log.filter(x => x.done).length })), L, a.focus);
+  const rating = E.rateSession(a.slots.map(s => ({ ...s, sets: s.log.filter(x => x.done && !x.sub).length })), L, a.focus);
   const minutes = Math.round((Date.now() - a.startedAt) / 60000);
   const session = {
     id: a.id, date: a.date, name: a.name, programId: a.programId, dayId: a.dayId, profile: a.profile,
     startedAt: a.startedAt, finishedAt: Date.now(), updatedAt: Date.now(), minutes,
     rating: { overall: rating.overall, grade: rating.grade },
-    slots: a.slots.map(({ suggest, ...s }) => ({ ...s, log: s.log.map(x => ({ w: x.w === '' || x.w == null ? null : +x.w, r: x.r === '' ? null : +x.r, done: x.done })) })),
+    slots: a.slots.map(({ suggest, ...s }) => ({ ...s, log: s.log.map(x => ({ w: x.w === '' || x.w == null ? null : +x.w, r: x.r === '' ? null : +x.r, done: x.done, ...(x.t && { t: x.t }), ...(x.sub && { sub: x.sub }) })) })),
   };
   state.sessions.push(session);
   if (a.programId && a.dayId && state.programs[a.programId]) {
@@ -816,7 +879,7 @@ function finishWorkout() {
   keepAwake(false);
   render({ keepScroll: false });
   window.scrollTo(0, 0);
-  openSheet({ type: 'finish', rating, minutes, sets: done.reduce((n, s) => n + s.log.filter(x => x.done).length, 0), prs });
+  openSheet({ type: 'finish', rating, minutes, sets: done.reduce((n, s) => n + s.log.filter(x => x.done && !x.sub).length, 0), prs });
 }
 
 function applySwap(where, i, newId, takenMark) {
@@ -856,7 +919,7 @@ function exportProgram(p) {
   const L = lib();
   const custom = {};
   p.days.forEach(d => d.slots.forEach(s => { if (L[s.ex]?.custom) custom[s.ex] = state.customExercises[s.ex]; }));
-  const slotOut = ({ ex, sets, reps, rest, tech, note, group, byCycle }) => ({ ex, sets, reps, rest, ...(tech && { tech }), ...(note && { note }), ...(group && { group }), ...(byCycle && { byCycle }) });
+  const slotOut = ({ ex, sets, reps, rest, tech, note, group, intensity, byCycle }) => ({ ex, sets, reps, rest, ...(tech && { tech }), ...(note && { note }), ...(group && { group }), ...(intensity && { intensity }), ...(byCycle && { byCycle }) });
   const out = {
     type: 'program', name: p.name,
     ...(p.cycles?.length && { cycles: p.cycles }),
@@ -909,6 +972,7 @@ function doImport(text, target = 'auto') {
       if (s.tech) slot.tech = String(s.tech);
       if (s.note) slot.note = String(s.note);
       if (s.group) slot.group = String(s.group);
+      if (s.intensity && E.techOf(s.intensity.t)) slot.intensity = { t: s.intensity.t, on: s.intensity.on || 'last', ...(s.intensity.pct && { pct: +s.intensity.pct }) };
       if (Array.isArray(s.byCycle)) slot.byCycle = s.byCycle.map(o => {
         if (!o) return null;
         const c = { ...o };
@@ -1044,19 +1108,47 @@ const actions = {
   done: el => {
     const s = state.active.slots[+el.dataset.i];
     const x = s.log[+el.dataset.j];
+    const j = +el.dataset.j;
     if (!x.done) {
-      const prevW = s.log.slice(0, +el.dataset.j).reverse().find(p => p.w !== '' && p.w != null)?.w;
+      const prevW = s.log.slice(0, j).reverse().find(p => p.w !== '' && p.w != null)?.w;
       if (x.w === '' || x.w == null) x.w = prevW ?? s.suggest?.weight ?? '';
-      if (x.r === '' && s.suggest?.reps) x.r = s.suggest.reps;
+      const subReps = x.sub ? E.techOf(x.sub)?.reps : null;
+      if (x.r === '' && (x.sub ? subReps : s.suggest?.reps)) x.r = x.sub ? subReps : s.suggest.reps;
       x.done = true;
-      const isLast = +el.dataset.j === s.log.length - 1 && +el.dataset.i === state.active.slots.length - 1;
-      if (!isLast && s.rest > 0) startTimer(s.rest);
-      else if (!isLast && s.group) toast('No rest: straight to the next exercise.');
+      if (!x.sub && E.techOf(x.t)?.sub) addTechRows(s, j);
+      const isLast = j === s.log.length - 1 && +el.dataset.i === state.active.slots.length - 1;
+      const rest = restAfter(s, j);
+      const next = s.log[j + 1];
+      if (isLast) {}
+      else if (rest > 0) startTimer(rest);
+      else if (next?.sub) toast(next.sub === 'drop' ? 'Drop the weight and go. No rest.' : `${E.techOf(next.sub).short}: keep going, no rest.`);
+      else if (s.group || x.t === 'superset') toast('No rest: straight to the next exercise.');
     } else x.done = false;
     save({ sync: false }); render();
   },
-  'add-set': el => { const s = state.active.slots[+el.dataset.i]; const last = s.log[s.log.length - 1]; s.log.push({ w: last?.w ?? '', r: '', done: false }); save({ sync: false }); render(); },
-  'del-set': el => { const s = state.active.slots[+el.dataset.i]; if (s.log.length > 1) s.log.pop(); save({ sync: false }); render(); },
+  'set-tech': el => openSheet({ type: 'set-tech', i: +el.dataset.i, j: +el.dataset.j }),
+  'pick-tech': el => {
+    const { i, j } = ui.sheet;
+    const s = state.active.slots[i];
+    const x = s.log[j];
+    // Changing technique clears unfinished extra rows from the old one.
+    let k = j + 1; while (s.log[k]?.sub) k++;
+    const extra = s.log.slice(j + 1, k);
+    if (extra.every(r => !r.done)) s.log.splice(j + 1, extra.length);
+    x.t = el.dataset.t || undefined; delete x.pct;
+    if (!x.t) delete x.t;
+    if (x.done && E.techOf(x.t)?.sub) addTechRows(s, j);
+    save({ sync: false }); closeSheet(); render();
+  },
+  'tech-more': el => {
+    const { i, j } = ui.sheet;
+    const s = state.active.slots[i];
+    if (+el.dataset.d > 0) addTechRows(s, j, 1);
+    else { let k = j + 1; while (s.log[k]?.sub) k++; if (k > j + 1) s.log.splice(k - 1, 1); }
+    save({ sync: false }); renderSheet(); render();
+  },
+  'add-set': el => { const s = state.active.slots[+el.dataset.i]; const last = mainSets(s.log).pop(); s.log.push({ w: last?.w ?? '', r: '', done: false }); save({ sync: false }); render(); },
+  'del-set': el => { const s = state.active.slots[+el.dataset.i]; if (s.log.length > 1) { if (s.log[s.log.length - 1].sub) s.log.pop(); else if (mainSets(s.log).length > 1) s.log.pop(); } save({ sync: false }); render(); },
   'toggle-rating': () => { ui.showRating = !ui.showRating; render(); },
   finish: () => finishWorkout(),
   discard: () => { if (confirm('Discard this workout? Logged sets will be lost.')) { state.active = null; save({ sync: false }); keepAwake(false); render(); } },
@@ -1181,6 +1273,12 @@ document.addEventListener('change', e => {
   else if (f === 'progress-ex') { ui.progressEx = el.value; render(); }
   else if (f === 'sheet-all') { ui.sheet.all = el.checked; renderSheet(); }
   else if (f === 'import-target') { ui.sheet.target = el.value; }
+  else if (f === 'intensity') {
+    const s = editTarget(el.dataset.where, +el.dataset.i, 'intensity');
+    if (el.value) s.intensity = { t: el.value, on: ALL_SETS_TECH.has(el.value) ? 'all' : 'last' };
+    else if (s === getSlots(el.dataset.where)[+el.dataset.i]) delete s.intensity; else s.intensity = null;
+    persistFor(el.dataset.where); render();
+  }
   else if (['rlo', 'rhi', 'rest', 'day-name', 'w', 'r'].includes(f)) { if (!['w', 'r'].includes(f)) render(); }
 });
 

@@ -7,6 +7,7 @@ A workout app for iPhone that you add to your Home Screen. It runs entirely in t
 - **Ratings:** each workout gets a 0–100 score and a letter grade built from three parts: muscle coverage (effective sets per target muscle), lengthened-position bias, and stimulus-to-fatigue ratio. Each exercise also gets its own grade. The Program tab rates your weekly sets per muscle against a target range.
 - **Substitution:** exercises that need equipment you don't have are swapped automatically for the closest match by muscle and movement pattern. Tap **Taken** when a machine is busy to swap it on the spot.
 - **Build:** pick a focus or specific muscles plus a time cap, and the app generates a workout from your equipment.
+- **Intensity techniques:** tap a set number during a workout to make it a drop set, mechanical drop, myo-reps, rest-pause, cluster, lengthened partials, failure, slow eccentric, stretch pause or 1½ reps. Techniques that add mini-sets insert the rows for you with the right short rest. Mini-sets are kept out of progression and set counts.
 - **Logging:** log weight and reps for each set. The app suggests your next load with double progression, calculates warm-up sets, and runs a rest timer. The screen stays awake during a workout.
 - **Training blocks:** 5 weeks: RIR 3 → 2 → 1 → 0–1, then a deload.
 - **Progress:** estimated 1RM trend for each lift, workout history, and PR detection.
@@ -55,6 +56,7 @@ Format:
 | `note` | slot | Coaching cues, shown under a "Cues" toggle. |
 | `group` | slot | Superset / giant-set label (e.g. "A1"). Use `"rest": 0` to go straight to the next exercise with no timer. |
 | `unit` | custom exercise | What the reps column counts: `"sec"`, `"passes"`, `"strides"`, `"reps/side"`, etc. Progress charts the best count instead of an estimated 1RM. |
+| `intensity` | slot or `byCycle` entry | Preset technique: `{ "t": "drop", "on": "last", "pct": 30 }`. `t` is one of `drop`, `mech`, `myo`, `rp`, `cluster`, `partials`, `failure`, `eccentric`, `pause`, `onehalf`, `superset`; `on` is `last`, `first` or `all`. Use `null` in a `byCycle` entry to switch it off that cycle. |
 | `cycles` | program | `[{ "label", "effort", "deload" }]`. Replaces the built-in 5-week block. `effort` is the target shown on each exercise (e.g. "RPE 8 → 9"). |
 | `byCycle` | slot | One entry per cycle overriding `sets`, `reps`, `rest`, `ex`, `tech` or `note` for that cycle. Deload volume comes from here, not from automatic halving. |
 | `startDate` | program | `"YYYY-MM-DD"` for Day 1 of Cycle 1. Used once at import: if the date has passed, the program starts where that schedule puts today. After that, the next workout only moves forward when you finish one; rest days pass on their own after a day without training. |

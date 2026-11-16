@@ -275,3 +275,15 @@ textarea.full { resize: vertical; font-size: 14px; }
 .prog-list li:first-child { border-top: 0; padding-top: 0; }
 .prog-list li.on b { color: var(--accent); }
 .row-btns.tight { margin-top: 6px; }
+
+/* ---------- set techniques ---------- */
+.set-n.tap { width: 34px; height: 44px; border-radius: 11px; border: 1px dashed var(--line); background: transparent; font-weight: 700; color: var(--ink-2); }
+.set-n.tap.has-t { border-style: solid; border-color: rgba(198, 240, 90, 0.5); color: var(--accent); }
+.set-row.sub-row { margin-left: 10px; }
+.set-row.sub-row input { height: 38px; font-size: 16px; }
+.set-n.sub { font-size: 10px; line-height: 1.1; font-weight: 700; color: var(--accent); text-transform: uppercase; letter-spacing: .02em; text-align: center; }
+.set-tech { font-size: 12px; margin: -2px 0 8px 42px; }
+.set-hint { margin: 2px 0 0; }
+.tech-pick button.on { background: var(--accent-dim); border-radius: 10px; }
+.slot-meta select { max-width: 170px; }
+.sheet-x { position: sticky; top: 0; float: right; z-index: 2; margin: -4px -4px 0 8px; background: var(--surface-2); }
