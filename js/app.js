@@ -28,19 +28,56 @@ function programSessions(pid) { return state.sessions.filter(s => s.programId ==
 const DAY_MS = 864e5;
 const dayNum = iso => Math.round(new Date(iso + 'T12:00').getTime() / DAY_MS);
 const hasRestDays = p => p.days.some(E.isRestDay);
-const calendarMode = p => !!p?.startDate;
+const isoShift = (iso, d) => { const x = new Date(iso + 'T12:00'); x.setDate(x.getDate() + d); return x.toLocaleDateString('en-CA'); };
 
-// Calendar programs: position in the rotation comes from the start date.
-function calendarPos(p, iso = todayISO()) {
-  const n = Math.max(0, dayNum(iso) - dayNum(p.startDate));
+// Position a start date implies for a given day (used once, to place a program on import).
+function datePos(p, startDate, iso = todayISO()) {
+  const n = Math.max(0, dayNum(iso) - dayNum(startDate));
   return { dayIdx: n % p.days.length, cycleIdx: Math.floor(n / p.days.length) };
+}
+
+// The rotation only moves when a workout is finished. Rest days are the exception:
+// each calendar day that passes without training after reaching one uses it up.
+// state.lastDone[pid] is the date the current position was reached.
+function markReached(pid, iso = todayISO()) {
+  state.lastDone = state.lastDone || {};
+  state.lastDone[pid] = iso;
+}
+function catchUpRest(p) {
+  if (!state.lastDone?.[p.id]) return false;
+  let moved = false;
+  for (let g = 0; g < p.days.length; g++) {
+    const rot = (state.rotation[p.id] || 0) % p.days.length;
+    const anchor = state.lastDone[p.id];
+    if (!E.isRestDay(p.days[rot]) || dayNum(todayISO()) - dayNum(anchor) < 2) break;
+    advanceRotation(p, rot);
+    state.lastDone[p.id] = isoShift(anchor, 1);
+    moved = true;
+  }
+  return moved;
+}
+
+// Older versions could store a calendar start date. Convert it to a fixed position once.
+function migrateCalendar() {
+  let changed = false;
+  for (const p of Object.values(state.programs)) {
+    if (!p.startDate) continue;
+    const pos = datePos(p, p.startDate);
+    state.rotation[p.id] = pos.dayIdx;
+    state.cycleIdx = state.cycleIdx || {};
+    if (p.cycles?.length) state.cycleIdx[p.id] = Math.min(pos.cycleIdx, p.cycles.length - 1);
+    markReached(p.id, isoShift(todayISO(), -1));
+    delete p.startDate;
+    changed = true;
+  }
+  if (changed) save();
 }
 
 function currentWeek(pid = state.settings.activeProgram) {
   const p = program(pid);
   if (!p) return E.mesoWeek(0, 1);
   if (p.cycles?.length) {
-    const raw = calendarMode(p) ? calendarPos(p).cycleIdx : state.cycleIdx?.[p.id] || 0;
+    const raw = state.cycleIdx?.[p.id] || 0;
     const idx = Math.min(raw, p.cycles.length - 1);
     const c = p.cycles[idx];
     return { ...c, idx, custom: true, total: p.cycles.length, done: raw >= p.cycles.length, label: c.label || `Cycle ${idx + 1}` };
@@ -56,7 +93,7 @@ const nextIdx = (p, i) => (i + 1) % p.days.length;
 function advanceRotation(p, i) {
   const next = nextIdx(p, i);
   state.rotation[p.id] = next;
-  if (next === 0 && p.cycles?.length && !calendarMode(p)) {
+  if (next === 0 && p.cycles?.length) {
     state.cycleIdx = state.cycleIdx || {};
     state.cycleIdx[p.id] = (state.cycleIdx[p.id] || 0) + 1;
   }
@@ -264,14 +301,14 @@ function viewToday() {
   if (state.active) return viewActive();
   const p = program();
   const L = lib();
-  const cal = calendarMode(p);
-  const rot = cal ? calendarPos(p).dayIdx : (state.rotation[p.id] || 0) % p.days.length;
+  if (catchUpRest(p)) { ui.preview = null; save(); }
+  const rot = (state.rotation[p.id] || 0) % p.days.length;
   const dayIdx = ui.previewDay != null ? p.days.findIndex(d => d.id === ui.previewDay) : rot;
   const day = p.days[dayIdx] || p.days[0];
   const week = currentWeek();
   // Programs with rest days in their rotation ignore the weekday rest-day setting.
   const programRest = E.isRestDay(day) && ui.previewDay == null;
-  const weekdayRest = !hasRestDays(p) && !cal && state.settings.restDays.includes(new Date().getDay()) && ui.previewDay == null;
+  const weekdayRest = !hasRestDays(p) && state.settings.restDays.includes(new Date().getDay()) && ui.previewDay == null;
   const isRest = programRest || weekdayRest;
   const doneToday = state.sessions.filter(s => s.date === todayISO());
   // Next training day after a rest day, for the "train anyway" button.
@@ -283,7 +320,7 @@ function viewToday() {
   }
   const r = E.isRestDay(day) ? null : E.rateSession(ui.preview.slots, L, focusMuscles(day));
   const subs = r ? ui.preview.slots.filter(s => s.subbedFrom).length : 0;
-  const pos = cal ? `Day ${dayIdx + 1} of ${p.days.length}` : '';
+  const pos = hasRestDays(p) || p.cycles?.length ? `Day ${dayIdx + 1} of ${p.days.length}` : '';
 
   return `
   <header class="page-head">
@@ -300,10 +337,10 @@ function viewToday() {
   ${week.done ? `<div class="banner ok">✓ All ${week.total} cycles of this program are complete. Showing the last cycle.</div>` : ''}
   ${isRest ? `<div class="card"><p>${programRest ? 'Rest day in the program rotation.' : 'Today is a scheduled rest day.'} Next training day is <b>${esc(nextTrain.name)}</b>.</p>
     <div class="row-btns">
-      ${programRest && !cal ? `<button class="btn primary" data-act="rest-done" data-i="${dayIdx}">Rest done, move to next day</button>` : ''}
+      ${programRest ? `<button class="btn primary" data-act="rest-done" data-i="${dayIdx}">Rest done, move to next day</button>` : ''}
       <button class="btn" data-act="pick-day" data-id="${nextTrain.id}">Train ${esc(nextTrain.name)} today</button>
     </div>
-    ${cal ? '<p class="muted small">This program follows its calendar. If you skip a day, use Program → “Push schedule back a day”.</p>' : ''}</div>` : `
+    ${programRest ? '<p class="muted small">Rest days pass on their own: tomorrow moves to the next day unless you train today.</p>' : ''}</div>` : `
   ${subs ? `<div class="banner">↺ ${subs} exercise${subs > 1 ? 's' : ''} auto-substituted for ${esc(profile().name)}</div>` : ''}
   ${ratingCard(r)}
   <section class="card">
@@ -313,7 +350,7 @@ function viewToday() {
   <button class="btn primary block big" data-act="start">Start workout</button>`}
   <section class="card">
     <div class="card-head"><h2>Pick a different day</h2></div>
-    <div class="chips">${p.days.map((d, i) => E.isRestDay(d) ? '' : `<button class="chip-btn ${d.id === day.id && !isRest ? 'on' : ''}" data-act="pick-day" data-id="${d.id}">${esc(d.name)}${i === rot ? (cal ? ' ·today' : ' ·next') : ''}</button>`).join('')}</div>
+    <div class="chips">${p.days.map((d, i) => E.isRestDay(d) ? '' : `<button class="chip-btn ${d.id === day.id && !isRest ? 'on' : ''}" data-act="pick-day" data-id="${d.id}">${esc(d.name)}${i === rot ? ' ·next' : ''}</button>`).join('')}</div>
   </section>`;
 }
 
@@ -420,12 +457,11 @@ function viewProgram() {
   const p = program();
   const L = lib();
   const week = currentWeek();
-  const cal = calendarMode(p);
   const resolved = p.days.map(d => E.resolveSlots(daySlots(d, week), L, ctx()));
   // A rotation longer or shorter than 7 days is scaled to sets per 7 days.
   const scale = hasRestDays(p) ? 7 / p.days.length : 1;
   const wk = E.rateWeek(resolved, L, scale);
-  const rot = cal ? calendarPos(p).dayIdx : (state.rotation[p.id] || 0) % p.days.length;
+  const rot = (state.rotation[p.id] || 0) % p.days.length;
   const cycles = E.cyclesOf(p);
   return `
   <header class="page-head"><div class="eyebrow">Program</div><h1>${esc(p.name)}</h1>
@@ -433,13 +469,10 @@ function viewProgram() {
       <select class="pill" data-field="program-select">${Object.values(state.programs).map(x => `<option value="${x.id}" ${x.id === p.id ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}</select>
       <span class="pill">${esc(week.label)}</span>
     </div></header>
-  ${p.cycles?.length || cal ? `<section class="card">
+  ${p.cycles?.length || hasRestDays(p) ? `<section class="card">
     <div class="card-head"><h2>Schedule</h2><span class="muted">${p.days.length}-day rotation${p.cycles?.length ? ` · ${p.cycles.length} cycles` : ''}</span></div>
-    ${p.cycles?.length && !cal ? `<label class="field">Current cycle <select data-field="cycle-select">${p.cycles.map((c, i) => `<option value="${i}" ${i === week.idx ? 'selected' : ''}>${esc(c.label || `Cycle ${i + 1}`)}</option>`).join('')}</select></label>` : ''}
-    ${cal ? `<p>Day 1 of cycle 1 was <b>${esc(new Date(p.startDate + 'T12:00').toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }))}</b>. Today is day ${rot + 1} of ${esc(week.label)}.</p>
-      <label class="field">Program start date <input type="date" data-field="start-date" value="${esc(p.startDate)}"></label>
-      <div class="row-btns"><button class="btn sm" data-act="shift-start" data-d="1">Push schedule back a day</button><button class="btn sm" data-act="shift-start" data-d="-1">Pull forward a day</button><button class="btn sm ghost" data-act="cal-off">Switch to manual rotation</button></div>`
-      : `<button class="btn sm" data-act="cal-on">Follow a calendar instead</button>`}
+    <p class="muted small">The next workout only moves forward when you finish one. Miss a day and the same workout is waiting when you come back. Rest days pass on their own after a day without training.</p>
+    ${p.cycles?.length ? `<label class="field">Current cycle <select data-field="cycle-select">${p.cycles.map((c, i) => `<option value="${i}" ${i === week.idx ? 'selected' : ''}>${esc(c.label || `Cycle ${i + 1}`)}</option>`).join('')}</select></label>` : ''}
     ${p.cycles?.length ? `<div class="eyebrow mt">Cycles</div><ol class="cycle-list">${p.cycles.map((c, i) => `<li class="${i === week.idx ? 'on' : ''} ${c.deload ? 'deload' : ''}">${esc(c.label || `Cycle ${i + 1}`)}${c.effort ? ` <span class="muted">· ${esc(c.effort)}</span>` : ''}</li>`).join('')}</ol>` : ''}
   </section>` : ''}
   <section class="card rating">
@@ -450,7 +483,7 @@ function viewProgram() {
   ${p.days.map((d, i) => {
     const open = ui.editDay === i;
     if (E.isRestDay(d)) return `<section class="card day rest-day">
-      <div class="day-head static"><span class="grade sm rest">—</span><span class="day-name"><b>${esc(d.name)}</b><span class="muted">Rest${i === rot ? (cal ? ' · today' : ' · next up') : ''}</span></span>
+      <div class="day-head static"><span class="grade sm rest">—</span><span class="day-name"><b>${esc(d.name)}</b><span class="muted">Rest${i === rot ? ' · next up' : ''}</span></span>
       <button class="icon" data-act="del-day" data-i="${i}" aria-label="Remove rest day">✕</button></div></section>`;
     const r = E.rateSession(resolved[i], L, focusMuscles(d));
     return `<section class="card day ${open ? 'open' : ''}">
@@ -589,7 +622,7 @@ function viewSettings() {
   <section class="card">
     <div class="card-head"><h2>Training</h2></div>
     <div class="eyebrow">Rest days</div>
-    ${hasRestDays(program()) || calendarMode(program()) ? '<p class="muted small">The active program has rest days built into its rotation, so these weekday rest days are ignored for it.</p>' : ''}
+    ${hasRestDays(program()) ? '<p class="muted small">The active program has rest days built into its rotation, so these weekday rest days are ignored for it.</p>' : ''}
     <div class="chips">${DAYS.map((d, i) => `<button class="chip-btn ${state.settings.restDays.includes(i) ? 'on' : ''}" data-act="restday" data-d="${i}">${d}</button>`).join('')}</div>
     <div class="eyebrow mt">Training block</div>
     ${program().cycles?.length ? `<p class="muted small">“${esc(program().name)}” sets its own cycles. Change the current cycle under Program → Schedule.</p><p>Currently: <b>${esc(currentWeek().label)}</b></p>` : `
@@ -759,7 +792,7 @@ function finishWorkout() {
   if (a.programId && a.dayId && state.programs[a.programId]) {
     const p = state.programs[a.programId];
     const idx = p.days.findIndex(d => d.id === a.dayId);
-    if (idx >= 0 && !calendarMode(p)) advanceRotation(p, idx);
+    if (idx >= 0) { advanceRotation(p, idx); markReached(p.id, a.date); }
   }
   state.active = null;
   ui.previewDay = null;
@@ -812,7 +845,6 @@ function exportProgram(p) {
   const out = {
     type: 'program', name: p.name,
     ...(p.cycles?.length && { cycles: p.cycles }),
-    ...(p.startDate && { startDate: p.startDate }),
     days: p.days.map(({ name, focus, rest, slots }) => (rest ? { name, rest: true } : { name, focus, slots: slots.map(slotOut) })),
     customExercises: custom,
   };
@@ -877,11 +909,18 @@ function doImport(text) {
   if (!days.some(d => !d.rest)) throw new Error('The program has no training days.');
   const cycles = Array.isArray(data.cycles) ? data.cycles.map((c, i) => ({ label: c.label || `Cycle ${i + 1}`, ...(c.effort && { effort: String(c.effort) }), ...(c.rir != null && { rir: String(c.rir) }), ...(c.deload && { deload: true }) })) : null;
   const id = uid();
-  state.programs[id] = { id, name: data.name || 'Imported program', days, ...(cycles?.length && { cycles }), ...(/^\d{4}-\d{2}-\d{2}$/.test(data.startDate || '') && { startDate: data.startDate }) };
-  // Optional starting point for manual-rotation programs (1-based in the file).
-  state.rotation[id] = Math.max(0, Math.min(days.length - 1, (+data.startDay || 1) - 1));
+  state.programs[id] = { id, name: data.name || 'Imported program', days, ...(cycles?.length && { cycles }) };
+  // Starting point: a past startDate places the program where that schedule is today;
+  // otherwise startCycle / startDay (1-based), defaulting to the beginning.
+  let startDay = (+data.startDay || 1) - 1, startCycle = (+data.startCycle || 1) - 1;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(data.startDate || '') && data.startDate <= todayISO()) {
+    const pos = datePos(state.programs[id], data.startDate);
+    startDay = pos.dayIdx; startCycle = pos.cycleIdx;
+  }
+  state.rotation[id] = Math.max(0, Math.min(days.length - 1, startDay));
   state.cycleIdx = state.cycleIdx || {};
-  state.cycleIdx[id] = cycles?.length ? Math.max(0, Math.min(cycles.length - 1, (+data.startCycle || 1) - 1)) : 0;
+  state.cycleIdx[id] = cycles?.length ? Math.max(0, Math.min(cycles.length - 1, startCycle)) : 0;
+  markReached(id, isoShift(todayISO(), -1));
   state.settings.activeProgram = id;
   save();
   return problems.length ? `Imported. ${problems.length} exercise(s) not recognized: ${problems.join(', ')}. Tap them to choose a match.` : `Imported “${state.programs[id].name}” and set it active.`;
@@ -988,39 +1027,13 @@ const actions = {
   'add-day': () => { const p = program(); p.days.push({ id: uid(), name: `Day ${p.days.length + 1}`, focus: 'full', slots: [] }); ui.editDay = p.days.length - 1; save(); render(); },
   'del-day': el => { const p = program(); if (p.days.length < 2) return toast('A program needs at least one day.'); if (confirm(`Delete ${p.days[+el.dataset.i].name}?`)) { p.days.splice(+el.dataset.i, 1); ui.editDay = null; save(); render(); } },
   'day-up': el => { const d = program().days, i = +el.dataset.i; if (i > 0) { [d[i - 1], d[i]] = [d[i], d[i - 1]]; ui.editDay = i - 1; save(); render(); } },
-  'rest-done': el => { const p = program(); advanceRotation(p, +el.dataset.i); ui.preview = null; ui.previewDay = null; save(); render(); toast('Rest logged. Next day is up.'); },
+  'rest-done': el => { const p = program(); advanceRotation(p, +el.dataset.i); markReached(p.id); ui.preview = null; ui.previewDay = null; save(); render(); toast('Rest logged. Next day is up.'); },
   'add-rest': () => { const p = program(); p.days.push({ id: uid(), name: 'Rest', rest: true, slots: [] }); save(); render(); },
-  'shift-start': el => {
-    const p = program();
-    const d = new Date(p.startDate + 'T12:00'); d.setDate(d.getDate() + +el.dataset.d);
-    p.startDate = d.toLocaleDateString('en-CA'); ui.preview = null; ui.previewDay = null; save(); render();
-    toast(+el.dataset.d > 0 ? 'Schedule pushed back a day.' : 'Schedule pulled forward a day.');
-  },
-  'cal-on': () => {
-    // Keep today's position: today becomes the current rotation day of the current cycle.
-    const p = program();
-    const w = currentWeek();
-    const rot = (state.rotation[p.id] || 0) % p.days.length;
-    const d = new Date(todayISO() + 'T12:00'); d.setDate(d.getDate() - rot - (w.custom ? w.idx : 0) * p.days.length);
-    p.startDate = d.toLocaleDateString('en-CA'); ui.preview = null; save(); render(); toast('Following the calendar from today.');
-  },
-  'cal-off': () => {
-    const p = program();
-    const pos = calendarPos(p);
-    state.rotation[p.id] = pos.dayIdx;
-    state.cycleIdx = state.cycleIdx || {};
-    if (p.cycles?.length) state.cycleIdx[p.id] = Math.min(pos.cycleIdx, p.cycles.length - 1);
-    delete p.startDate; ui.preview = null; save(); render(); toast('Switched to manual rotation.');
-  },
   'set-next': el => {
     const p = program();
-    if (calendarMode(p)) {
-      // Move the calendar so the chosen day lands on today, keeping the current cycle.
-      const w = currentWeek();
-      const d = new Date(todayISO() + 'T12:00'); d.setDate(d.getDate() - +el.dataset.i - (w.custom ? w.idx : 0) * p.days.length);
-      p.startDate = d.toLocaleDateString('en-CA');
-    } else state.rotation[p.id] = +el.dataset.i;
-    ui.preview = null; save(); toast(calendarMode(p) ? 'Schedule moved so this day is today.' : 'Set as next workout.'); render();
+    state.rotation[p.id] = +el.dataset.i;
+    markReached(p.id, isoShift(todayISO(), -1));
+    ui.preview = null; save(); toast('Set as next workout.'); render();
   },
   'prog-new': () => { const name = prompt('Program name'); if (!name) return; const id = uid(); state.programs[id] = { id, name, days: [{ id: uid(), name: 'Day 1', focus: 'full', slots: [] }] }; state.rotation[id] = 0; state.settings.activeProgram = id; ui.editDay = 0; save(); render(); },
   'prog-dup': () => { const p = structuredClone(program()); p.id = uid(); p.name += ' (copy)'; state.programs[p.id] = p; state.rotation[p.id] = 0; state.settings.activeProgram = p.id; save(); render(); },
@@ -1099,7 +1112,6 @@ document.addEventListener('change', e => {
     ui.preview = null; save();
   } else if (f === 'program-select') { state.settings.activeProgram = el.value; ui.editDay = null; ui.preview = null; save(); render(); }
   else if (f === 'cycle-select') { state.cycleIdx = state.cycleIdx || {}; state.cycleIdx[program().id] = +el.value; ui.preview = null; save(); render(); }
-  else if (f === 'start-date') { if (/^\d{4}-\d{2}-\d{2}$/.test(el.value)) { program().startDate = el.value; ui.preview = null; save(); render(); } }
   else if (f === 'day-focus') { program().days[+el.dataset.i].focus = el.value; save(); render(); }
   else if (f === 'progress-ex') { ui.progressEx = el.value; render(); }
   else if (f === 'sheet-all') { ui.sheet.all = el.checked; renderSheet(); }
@@ -1109,7 +1121,8 @@ document.addEventListener('change', e => {
 onSync(() => { if (ui.view === 'settings') render(); });
 
 // ================= boot =================
+migrateCalendar();
 render({ keepScroll: false });
 if (state.active) keepAwake(true);
-if (gist().token) syncNow().then(() => { ui.preview = null; render(); }).catch(() => {});
+if (gist().token) syncNow().then(() => { migrateCalendar(); ui.preview = null; render(); }).catch(() => {});
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js').catch(() => {});

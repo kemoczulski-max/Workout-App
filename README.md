@@ -57,8 +57,8 @@ Format:
 | `unit` | custom exercise | What the reps column counts: `"sec"`, `"passes"`, `"strides"`, `"reps/side"`, etc. Progress charts the best count instead of an estimated 1RM. |
 | `cycles` | program | `[{ "label", "effort", "deload" }]`. Replaces the built-in 5-week block. `effort` is the target shown on each exercise (e.g. "RPE 8 → 9"). |
 | `byCycle` | slot | One entry per cycle overriding `sets`, `reps`, `rest`, `ex`, `tech` or `note` for that cycle. Deload volume comes from here, not from automatic halving. |
-| `startDate` | program | `"YYYY-MM-DD"` for Day 1 of Cycle 1. Today's workout and cycle follow the calendar. Skipped a day? Program → Schedule → "Push schedule back a day". |
-| `startCycle`, `startDay` | program | 1-based starting point when the program has no `startDate`. |
+| `startDate` | program | `"YYYY-MM-DD"` for Day 1 of Cycle 1. Used once at import: if the date has passed, the program starts where that schedule puts today. After that, the next workout only moves forward when you finish one; rest days pass on their own after a day without training. |
+| `startCycle`, `startDay` | program | 1-based starting point when there is no past `startDate`. |
 
 Example slot using several of these:
 ```json
