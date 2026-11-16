@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Lift</title>
+  <meta name="theme-color" content="#0e0f11">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Lift">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <link rel="icon" href="icons/icon-192.png">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+  <main id="main" class="wrap"></main>
+
+  <div id="timer" class="timer" hidden>
+    <div class="timer-fill" id="timer-fill"></div>
+    <span class="timer-label">Rest</span>
+    <b id="timer-time">0:00</b>
+    <button class="btn sm ghost" data-act="timer-add" data-s="-15">−15</button>
+    <button class="btn sm ghost" data-act="timer-add" data-s="15">+15</button>
+    <button class="btn sm" data-act="timer-skip">Skip</button>
+  </div>
+
+  <nav class="tabs">
+    <button class="tab" data-act="nav" data-view="today"><span class="ti">◉</span>Today</button>
+    <button class="tab" data-act="nav" data-view="build"><span class="ti">✚</span>Build</button>
+    <button class="tab" data-act="nav" data-view="program"><span class="ti">☰</span>Program</button>
+    <button class="tab" data-act="nav" data-view="progress"><span class="ti">↗</span>Progress</button>
+    <button class="tab" data-act="nav" data-view="settings"><span class="ti">⚙</span>Setup</button>
+  </nav>
+
+  <div id="sheet-root"></div>
+  <div id="toast" class="toast" role="status"></div>
+
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>
