@@ -508,15 +508,25 @@ function viewProgram() {
   <div class="row-btns"><button class="btn block ghost" data-act="add-day">+ Add day</button><button class="btn block ghost" data-act="add-rest">+ Add rest day</button></div>
   <section class="card">
     <div class="card-head"><h2>Programs</h2></div>
+    <ul class="prog-list">${Object.values(state.programs).map(x => {
+      const w = currentWeek(x.id);
+      const r = (state.rotation[x.id] || 0) % x.days.length;
+      return `<li class="${x.id === p.id ? 'on' : ''}">
+        <div class="day-name"><b>${esc(x.name)}</b><span class="muted">${x.id === p.id ? 'Active · ' : ''}Next: ${esc(x.days[r]?.name || '')}${x.cycles?.length ? ` · ${esc(w.label)}` : ''}</span></div>
+        <div class="row-btns tight">
+          ${x.id === p.id ? '' : `<button class="btn sm" data-act="prog-use" data-id="${x.id}">Use</button>`}
+          <button class="btn sm" data-act="sheet-import" data-id="${x.id}">Update</button>
+          <button class="btn sm danger-ghost" data-act="prog-del" data-id="${x.id}">Delete</button>
+        </div></li>`;
+    }).join('')}</ul>
     <div class="row-btns">
+      <button class="btn sm" data-act="sheet-import">Import new</button>
+      <button class="btn sm" data-act="prog-export">Export active</button>
       <button class="btn sm" data-act="prog-new">New blank</button>
       <button class="btn sm" data-act="prog-dup">Duplicate</button>
       <button class="btn sm" data-act="prog-rename">Rename</button>
-      <button class="btn sm" data-act="sheet-import">Import</button>
-      <button class="btn sm" data-act="prog-export">Export</button>
-      <button class="btn sm danger-ghost" data-act="prog-del">Delete</button>
     </div>
-    <p class="muted small">To import a PDF program: upload the PDF to Claude, ask for an app import, then paste the result under Import.</p>
+    <p class="muted small"><b>Update</b> swaps in new program code but keeps your place, your current cycle and your lift history. Importing a program with the same name as one you have updates it automatically.</p>
   </section>`;
 }
 
@@ -700,7 +710,12 @@ function sheetHTML() {
       <button class="btn block danger-ghost" data-act="remove-slot" data-where="active" data-i="${sh.i}" data-close="1">Remove exercise</button>`;
   } else if (sh.type === 'import') {
     body = `<h2>Import</h2>
-      <p class="muted small">Paste a program from Claude (converted from a PDF) or a full backup file. Programs are added alongside your existing ones.</p>
+      <p class="muted small">Paste a program from Claude or a full backup file.</p>
+      <label class="field">Import as <select data-field="import-target">
+        <option value="auto" ${(sh.target || 'auto') === 'auto' ? 'selected' : ''}>Update the program with the same name, or add it if there isn't one</option>
+        <option value="new" ${sh.target === 'new' ? 'selected' : ''}>A new program</option>
+        ${Object.values(state.programs).map(x => `<option value="${x.id}" ${sh.target === x.id ? 'selected' : ''}>Update “${esc(x.name)}” (keep my place)</option>`).join('')}
+      </select></label>
       <textarea class="full" rows="10" data-field="import-text" placeholder='{"type":"program", ...}'>${esc(sh.text || '')}</textarea>
       ${sh.error ? `<div class="banner warn">${esc(sh.error)}</div>` : ''}
       <button class="btn primary block" data-act="do-import">Import</button>`;
@@ -864,7 +879,7 @@ function findByName(name) {
   return bestScore > 0.6 ? best : null;
 }
 
-function doImport(text) {
+function doImport(text, target = 'auto') {
   let data;
   try { data = JSON.parse(text.trim().replace(/^```(json)?|```$/g, '')); } catch { throw new Error('That is not valid JSON. Paste the whole block, including the first { and last }.'); }
   if (data.sessions && data.programs) {
@@ -908,8 +923,16 @@ function doImport(text) {
   }));
   if (!days.some(d => !d.rest)) throw new Error('The program has no training days.');
   const cycles = Array.isArray(data.cycles) ? data.cycles.map((c, i) => ({ label: c.label || `Cycle ${i + 1}`, ...(c.effort && { effort: String(c.effort) }), ...(c.rir != null && { rir: String(c.rir) }), ...(c.deload && { deload: true }) })) : null;
+  const name = data.name || 'Imported program';
+  const existing = target === 'new' ? null
+    : target === 'auto' ? Object.values(state.programs).find(x => x.name.trim().toLowerCase() === name.trim().toLowerCase())
+    : state.programs[target];
+  if (existing) {
+    const msg = updateProgram(existing, { name, days, cycles });
+    return problems.length ? `${msg} ${problems.length} exercise(s) not recognized: ${problems.join(', ')}.` : msg;
+  }
   const id = uid();
-  state.programs[id] = { id, name: data.name || 'Imported program', days, ...(cycles?.length && { cycles }) };
+  state.programs[id] = { id, name, days, ...(cycles?.length && { cycles }) };
   // Starting point: a past startDate places the program where that schedule is today;
   // otherwise startCycle / startDay (1-based), defaulting to the beginning.
   let startDay = (+data.startDay || 1) - 1, startCycle = (+data.startCycle || 1) - 1;
@@ -924,6 +947,47 @@ function doImport(text) {
   state.settings.activeProgram = id;
   save();
   return problems.length ? `Imported. ${problems.length} exercise(s) not recognized: ${problems.join(', ')}. Tap them to choose a match.` : `Imported “${state.programs[id].name}” and set it active.`;
+}
+
+// Replace a program's contents in place. Keeps its id, the ids of matching days (so history
+// and an in-progress workout still line up), the current day, the current cycle and the
+// rest-day anchor. Exercise history is keyed by exercise, so load suggestions carry over.
+function updateProgram(p, { name, days, cycles }) {
+  const oldDays = p.days;
+  const curId = oldDays[(state.rotation[p.id] || 0) % oldDays.length]?.id;
+  const curIdx = (state.rotation[p.id] || 0) % oldDays.length;
+  const taken = new Set();
+  const norm = x => x.trim().toLowerCase();
+  // Match by name first, then by position for days that were renamed.
+  days.forEach(d => { const od = oldDays.find(o => !taken.has(o.id) && norm(o.name) === norm(d.name) && !!o.rest === !!d.rest); if (od) { d.id = od.id; taken.add(od.id); } });
+  days.forEach((d, i) => { if (taken.has(d.id)) return; const od = oldDays[i]; if (od && !taken.has(od.id) && !!od.rest === !!d.rest) { d.id = od.id; taken.add(od.id); } });
+  p.name = name;
+  p.days = days;
+  if (cycles?.length) p.cycles = cycles; else delete p.cycles;
+  let at = days.findIndex(d => d.id === curId);
+  if (at < 0) at = Math.min(curIdx, days.length - 1);
+  state.rotation[p.id] = at;
+  state.cycleIdx = state.cycleIdx || {};
+  if (p.cycles) state.cycleIdx[p.id] = Math.min(state.cycleIdx[p.id] || 0, p.cycles.length - 1);
+  else delete state.cycleIdx[p.id];
+  ui.preview = null;
+  save();
+  const w = currentWeek(p.id);
+  return `Updated “${p.name}”. You're still on ${days[at].name}${p.cycles ? `, ${w.label}` : ''}.`;
+}
+
+function deleteProgram(id) {
+  if (Object.keys(state.programs).length < 2) { toast('Keep at least one program.'); return; }
+  const p = state.programs[id];
+  if (state.active?.programId === id) { toast('Finish or discard the workout in progress first.'); return; }
+  if (!confirm(`Delete “${p.name}”? Logged workouts and lift history are kept.`)) return;
+  delete state.programs[id];
+  delete state.rotation[id];
+  if (state.cycleIdx) delete state.cycleIdx[id];
+  if (state.lastDone) delete state.lastDone[id];
+  if (state.settings.activeProgram === id) state.settings.activeProgram = Object.keys(state.programs)[0];
+  ui.preview = null; ui.editDay = null;
+  save(); render(); toast(`Deleted “${p.name}”.`);
 }
 
 function download(name, text) {
@@ -1038,11 +1102,12 @@ const actions = {
   'prog-new': () => { const name = prompt('Program name'); if (!name) return; const id = uid(); state.programs[id] = { id, name, days: [{ id: uid(), name: 'Day 1', focus: 'full', slots: [] }] }; state.rotation[id] = 0; state.settings.activeProgram = id; ui.editDay = 0; save(); render(); },
   'prog-dup': () => { const p = structuredClone(program()); p.id = uid(); p.name += ' (copy)'; state.programs[p.id] = p; state.rotation[p.id] = 0; state.settings.activeProgram = p.id; save(); render(); },
   'prog-rename': () => { const p = program(); const n = prompt('Rename program', p.name); if (n) { p.name = n; save(); render(); } },
-  'prog-del': () => { if (Object.keys(state.programs).length < 2) return toast('Keep at least one program.'); const p = program(); if (confirm(`Delete “${p.name}”? Logged workouts are kept.`)) { delete state.programs[p.id]; state.settings.activeProgram = Object.keys(state.programs)[0]; save(); render(); } },
+  'prog-del': el => deleteProgram(el.dataset.id || program().id),
+  'prog-use': el => { state.settings.activeProgram = el.dataset.id; ui.preview = null; ui.editDay = null; save(); render(); toast(`Now using “${state.programs[el.dataset.id].name}”.`); },
   'prog-export': () => openSheet({ type: 'export', title: 'Export program', text: exportProgram(program()), file: 'program.json' }),
-  'sheet-import': () => openSheet({ type: 'import' }),
+  'sheet-import': el => openSheet({ type: 'import', target: el.dataset.id || 'auto' }),
   'do-import': () => {
-    try { const msg = doImport(ui.sheet.text || ''); if (msg) { closeSheet(); ui.preview = null; ui.view = 'program'; render({ keepScroll: false }); toast(msg); } }
+    try { const msg = doImport(ui.sheet.text || '', ui.sheet.target || 'auto'); if (msg) { closeSheet(); ui.preview = null; ui.view = 'program'; render({ keepScroll: false }); toast(msg); } }
     catch (e) { ui.sheet.error = e.message; renderSheet(); }
   },
   'copy-export': async () => { try { await navigator.clipboard.writeText(ui.sheet.text); toast('Copied.'); } catch { toast('Copy failed. Select the text and copy it manually.'); } },
@@ -1115,6 +1180,7 @@ document.addEventListener('change', e => {
   else if (f === 'day-focus') { program().days[+el.dataset.i].focus = el.value; save(); render(); }
   else if (f === 'progress-ex') { ui.progressEx = el.value; render(); }
   else if (f === 'sheet-all') { ui.sheet.all = el.checked; renderSheet(); }
+  else if (f === 'import-target') { ui.sheet.target = el.value; }
   else if (['rlo', 'rhi', 'rest', 'day-name', 'w', 'r'].includes(f)) { if (!['w', 'r'].includes(f)) render(); }
 });
 

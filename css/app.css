@@ -268,3 +268,10 @@ textarea.full { resize: vertical; font-size: 14px; }
 .cycle-list li.deload { color: var(--warn); }
 .cycle-list li.on.deload { color: var(--accent); }
 .row-btns > .btn.block { flex: 1; }
+
+/* ---------- program list ---------- */
+.prog-list { list-style: none; margin: 0 0 6px; padding: 0; }
+.prog-list li { padding: 10px 0; border-top: 1px solid var(--line); }
+.prog-list li:first-child { border-top: 0; padding-top: 0; }
+.prog-list li.on b { color: var(--accent); }
+.row-btns.tight { margin-top: 6px; }
