@@ -25,10 +25,41 @@ function toast(msg) {
 
 function programSessions(pid) { return state.sessions.filter(s => s.programId === pid); }
 
+const DAY_MS = 864e5;
+const dayNum = iso => Math.round(new Date(iso + 'T12:00').getTime() / DAY_MS);
+const hasRestDays = p => p.days.some(E.isRestDay);
+const calendarMode = p => !!p?.startDate;
+
+// Calendar programs: position in the rotation comes from the start date.
+function calendarPos(p, iso = todayISO()) {
+  const n = Math.max(0, dayNum(iso) - dayNum(p.startDate));
+  return { dayIdx: n % p.days.length, cycleIdx: Math.floor(n / p.days.length) };
+}
+
 function currentWeek(pid = state.settings.activeProgram) {
   const p = program(pid);
+  if (!p) return E.mesoWeek(0, 1);
+  if (p.cycles?.length) {
+    const raw = calendarMode(p) ? calendarPos(p).cycleIdx : state.cycleIdx?.[p.id] || 0;
+    const idx = Math.min(raw, p.cycles.length - 1);
+    const c = p.cycles[idx];
+    return { ...c, idx, custom: true, total: p.cycles.length, done: raw >= p.cycles.length, label: c.label || `Cycle ${idx + 1}` };
+  }
   const n = programSessions(pid).length - (state.settings.mesoStart || 0);
-  return E.mesoWeek(Math.max(0, n), p.days.length);
+  return E.mesoWeek(Math.max(0, n), E.trainingDays(p).length || 1);
+}
+const effortText = week => week.effort || `RIR ${week.rir}`;
+const daySlots = (day, week) => (day.slots || []).map(s => E.slotFor(s, week.idx));
+const nextIdx = (p, i) => (i + 1) % p.days.length;
+
+// Advance the rotation past day i; moving from the last day back to the first starts the next cycle.
+function advanceRotation(p, i) {
+  const next = nextIdx(p, i);
+  state.rotation[p.id] = next;
+  if (next === 0 && p.cycles?.length && !calendarMode(p)) {
+    state.cycleIdx = state.cycleIdx || {};
+    state.cycleIdx[p.id] = (state.cycleIdx[p.id] || 0) + 1;
+  }
 }
 
 function history(exId) {
@@ -160,6 +191,15 @@ function ratingCard(r, { title = 'Workout rating', compact = false } = {}) {
   </section>`;
 }
 
+const restText = s => (s.rest ? `${s.rest}s rest` : 'no rest, go to next');
+const groupTag = s => (s.group ? `<span class="chip grp">${esc(s.group)}</span> ` : '');
+// Technique and coaching cues carried over from an imported program.
+function slotExtras(s) {
+  const tech = s.tech ? `<div class="tech">◆ ${esc(s.tech)}</div>` : '';
+  const note = s.note ? `<details class="cue"><summary>Cues</summary><p>${esc(s.note)}</p></details>` : '';
+  return tech + note;
+}
+
 // Editable slot list used by Today preview, Build and Program editor.
 function slotList(slots, where, { editable = true } = {}) {
   const L = lib();
@@ -168,19 +208,22 @@ function slotList(slots, where, { editable = true } = {}) {
     if (!ex) return `<li class="slot missing"><div class="slot-main"><b>Unknown exercise: ${esc(s.ex)}</b></div>
       <div class="slot-actions"><button class="btn sm" data-act="swap" data-where="${where}" data-i="${i}">Choose</button><button class="btn sm ghost" data-act="remove-slot" data-where="${where}" data-i="${i}">Remove</button></div></li>`;
     const er = E.rateExercise(ex);
+    const u = E.repUnit(ex);
     const sub = s.subbedFrom ? `<div class="subbed">↺ Swapped from ${esc(L[s.subbedFrom]?.name || s.subbedFrom)}</div>` : '';
     const miss = s.missing ? `<div class="subbed warn">No equipment match in this profile</div>` : '';
     return `<li class="slot">
       <div class="slot-main">
-        <div class="slot-title"><span class="chip ${gradeClass(er.grade)}">${er.grade}</span> <b>${esc(ex.name)}</b></div>
+        <div class="slot-title">${groupTag(s)}<span class="chip ${gradeClass(er.grade)}">${er.grade}</span> <b>${esc(ex.name)}</b></div>
         <div class="slot-meta">
           ${editable ? `
           <span class="stepper"><button data-act="sets" data-d="-1" data-where="${where}" data-i="${i}" aria-label="Fewer sets">−</button>${s.sets} sets<button data-act="sets" data-d="1" data-where="${where}" data-i="${i}" aria-label="More sets">+</button></span>
-          <span class="reps"><input inputmode="numeric" data-field="rlo" data-where="${where}" data-i="${i}" value="${s.reps[0]}">–<input inputmode="numeric" data-field="rhi" data-where="${where}" data-i="${i}" value="${s.reps[1]}"> reps</span>
+          <span class="reps"><input inputmode="numeric" data-field="rlo" data-where="${where}" data-i="${i}" value="${s.reps[0]}">–<input inputmode="numeric" data-field="rhi" data-where="${where}" data-i="${i}" value="${s.reps[1]}"> ${esc(u)}</span>
           <span class="reps"><input inputmode="numeric" data-field="rest" data-where="${where}" data-i="${i}" value="${s.rest}">s rest</span>`
-          : `<span>${s.sets} × ${s.reps[0]}–${s.reps[1]}</span><span>${s.rest}s rest</span>`}
+          : `<span>${s.sets} × ${E.fmtRange(s.reps)} ${esc(u)}</span><span>${restText(s)}</span>`}
         </div>
         <div class="slot-tags">${esc(PATTERNS[ex.pattern] || ex.pattern)} · ${Object.entries(ex.muscles).filter(([, w]) => w >= 1).map(([m]) => MUSCLES[m]).join(', ')}</div>
+        ${slotExtras(s)}
+        ${editable && s.byCycle ? '<div class="subbed">This exercise changes by cycle. Edits apply to the cycle shown.</div>' : ''}
         ${sub}${miss}
       </div>
       <div class="slot-actions">
@@ -202,6 +245,15 @@ function getSlots(where) {
   if (where.startsWith('day:')) return program().days[+where.slice(4)]?.slots;
   return null;
 }
+// In the program editor, a slot with per-cycle overrides is edited for the current cycle.
+function editTarget(where, i, key) {
+  const s = getSlots(where)[i];
+  if (where.startsWith('day:') && s.byCycle) {
+    const o = s.byCycle[currentWeek().idx];
+    if (o && o[key] != null) return o;
+  }
+  return s;
+}
 function persistFor(where) {
   if (where === 'active' || where.startsWith('day:')) save({ sync: where !== 'active' });
 }
@@ -212,42 +264,56 @@ function viewToday() {
   if (state.active) return viewActive();
   const p = program();
   const L = lib();
-  const rot = (state.rotation[p.id] || 0) % p.days.length;
+  const cal = calendarMode(p);
+  const rot = cal ? calendarPos(p).dayIdx : (state.rotation[p.id] || 0) % p.days.length;
   const dayIdx = ui.previewDay != null ? p.days.findIndex(d => d.id === ui.previewDay) : rot;
   const day = p.days[dayIdx] || p.days[0];
   const week = currentWeek();
-  const isRest = state.settings.restDays.includes(new Date().getDay()) && ui.previewDay == null;
+  // Programs with rest days in their rotation ignore the weekday rest-day setting.
+  const programRest = E.isRestDay(day) && ui.previewDay == null;
+  const weekdayRest = !hasRestDays(p) && !cal && state.settings.restDays.includes(new Date().getDay()) && ui.previewDay == null;
+  const isRest = programRest || weekdayRest;
   const doneToday = state.sessions.filter(s => s.date === todayISO());
+  // Next training day after a rest day, for the "train anyway" button.
+  let nextTrain = day;
+  if (E.isRestDay(day)) { let k = dayIdx; for (let g = 0; g < p.days.length && E.isRestDay(p.days[k]); g++) k = nextIdx(p, k); nextTrain = p.days[k]; }
 
-  if (!ui.preview || ui.preview.dayId !== day.id || ui.preview.profile !== state.settings.activeProfile || ui.preview.programId !== p.id) {
-    ui.preview = { dayId: day.id, programId: p.id, profile: state.settings.activeProfile, slots: E.resolveSlots(day.slots, L, ctx()) };
+  if (!E.isRestDay(day) && (!ui.preview || ui.preview.dayId !== day.id || ui.preview.profile !== state.settings.activeProfile || ui.preview.programId !== p.id || ui.preview.cycle !== week.idx)) {
+    ui.preview = { dayId: day.id, programId: p.id, profile: state.settings.activeProfile, cycle: week.idx, slots: E.resolveSlots(daySlots(day, week), L, ctx()) };
   }
-  const r = E.rateSession(ui.preview.slots, L, focusMuscles(day));
-  const subs = ui.preview.slots.filter(s => s.subbedFrom).length;
+  const r = E.isRestDay(day) ? null : E.rateSession(ui.preview.slots, L, focusMuscles(day));
+  const subs = r ? ui.preview.slots.filter(s => s.subbedFrom).length : 0;
+  const pos = cal ? `Day ${dayIdx + 1} of ${p.days.length}` : '';
 
   return `
   <header class="page-head">
     <div class="eyebrow">${new Date().toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' })}</div>
-    <h1>${isRest ? 'Rest day' : esc(day.name)}</h1>
+    <h1>${isRest ? (programRest ? esc(day.name) : 'Rest day') : esc(day.name)}</h1>
     <div class="head-meta">
       <span class="pill">${esc(p.name)}</span>
-      <span class="pill ${week.deload ? 'pill-warn' : ''}">${week.label}</span>
+      <span class="pill ${week.deload ? 'pill-warn' : ''}">${esc(week.label)}</span>
+      ${pos ? `<span class="pill">${pos}</span>` : ''}
       <button class="pill pill-btn" data-act="sheet-profile">⚙ ${esc(profile().name)}</button>
     </div>
   </header>
   ${doneToday.length ? `<div class="banner ok">✓ Logged today: ${doneToday.map(s => esc(s.name)).join(', ')}</div>` : ''}
-  ${isRest ? `<div class="card"><p>Today is a scheduled rest day. Next up in the rotation is <b>${esc(day.name)}</b>.</p>
-    <button class="btn" data-act="pick-day" data-id="${day.id}">Train ${esc(day.name)} anyway</button></div>` : `
+  ${week.done ? `<div class="banner ok">✓ All ${week.total} cycles of this program are complete. Showing the last cycle.</div>` : ''}
+  ${isRest ? `<div class="card"><p>${programRest ? 'Rest day in the program rotation.' : 'Today is a scheduled rest day.'} Next training day is <b>${esc(nextTrain.name)}</b>.</p>
+    <div class="row-btns">
+      ${programRest && !cal ? `<button class="btn primary" data-act="rest-done" data-i="${dayIdx}">Rest done, move to next day</button>` : ''}
+      <button class="btn" data-act="pick-day" data-id="${nextTrain.id}">Train ${esc(nextTrain.name)} today</button>
+    </div>
+    ${cal ? '<p class="muted small">This program follows its calendar. If you skip a day, use Program → “Push schedule back a day”.</p>' : ''}</div>` : `
   ${subs ? `<div class="banner">↺ ${subs} exercise${subs > 1 ? 's' : ''} auto-substituted for ${esc(profile().name)}</div>` : ''}
   ${ratingCard(r)}
   <section class="card">
-    <div class="card-head"><h2>Exercises</h2><span class="muted">${ui.preview.slots.reduce((a, s) => a + (week.deload ? Math.ceil(s.sets / 2) : s.sets), 0)} sets</span></div>
+    <div class="card-head"><h2>Exercises</h2><span class="muted">${ui.preview.slots.reduce((a, s) => a + (week.deload && !week.custom ? Math.ceil(s.sets / 2) : s.sets), 0)} sets · ${esc(effortText(week))}</span></div>
     ${slotList(ui.preview.slots, 'preview', { editable: false })}
   </section>
   <button class="btn primary block big" data-act="start">Start workout</button>`}
   <section class="card">
     <div class="card-head"><h2>Pick a different day</h2></div>
-    <div class="chips">${p.days.map((d, i) => `<button class="chip-btn ${d.id === day.id && !isRest ? 'on' : ''}" data-act="pick-day" data-id="${d.id}">${esc(d.name)}${i === rot ? ' ·next' : ''}</button>`).join('')}</div>
+    <div class="chips">${p.days.map((d, i) => E.isRestDay(d) ? '' : `<button class="chip-btn ${d.id === day.id && !isRest ? 'on' : ''}" data-act="pick-day" data-id="${d.id}">${esc(d.name)}${i === rot ? (cal ? ' ·today' : ' ·next') : ''}</button>`).join('')}</div>
   </section>`;
 }
 
@@ -264,6 +330,7 @@ function viewActive() {
     const ex = L[s.ex];
     if (!ex) return '';
     const er = E.rateExercise(ex);
+    const u = E.repUnit(ex);
     const workW = s.log.find(x => x.w !== '' && x.w != null)?.w || s.suggest?.weight;
     const wu = E.warmups(ex, +workW);
     const allDone = s.log.length && s.log.every(x => x.done);
@@ -271,8 +338,9 @@ function viewActive() {
     <section class="card ex-card ${allDone ? 'done' : ''}" id="ex-${i}">
       <div class="ex-head">
         <div>
-          <div class="slot-title"><span class="chip ${gradeClass(er.grade)}">${er.grade}</span> <b>${esc(ex.name)}</b></div>
-          <div class="muted">${s.reps[0]}–${s.reps[1]} reps · ${s.rest}s rest · RIR ${week.rir}</div>
+          <div class="slot-title">${groupTag(s)}<span class="chip ${gradeClass(er.grade)}">${er.grade}</span> <b>${esc(ex.name)}</b></div>
+          <div class="muted">${E.fmtRange(s.reps)} ${esc(u)} · ${restText(s)} · ${esc(effortText(week))}</div>
+          ${slotExtras(s)}
           ${s.subbedFrom ? `<div class="subbed">↺ Swapped from ${esc(L[s.subbedFrom]?.name || s.subbedFrom)}</div>` : ''}
         </div>
         <button class="icon" data-act="ex-menu" data-i="${i}" aria-label="Exercise options">⋯</button>
@@ -280,7 +348,7 @@ function viewActive() {
       ${s.suggest?.note ? `<div class="suggest">↗ ${esc(s.suggest.note)}</div>` : ''}
       ${wu.length ? `<div class="warmup"><span>Warm-up</span>${wu.map(w => `<b>${fmtW(w.w)}×${w.r}</b>`).join('')}</div>` : ''}
       <div class="sets">
-        <div class="set-row head"><span>Set</span><span>${unit()}</span><span>Reps</span><span></span></div>
+        <div class="set-row head"><span>Set</span><span>${unit()}</span><span>${esc(u[0].toUpperCase() + u.slice(1))}</span><span></span></div>
         ${s.log.map((x, j) => `
         <div class="set-row ${x.done ? 'is-done' : ''}">
           <span class="set-n">${j + 1}</span>
@@ -302,7 +370,7 @@ function viewActive() {
   <header class="page-head">
     <div class="eyebrow">In progress · ${elapsed} min · ${doneSets}/${totalSets} sets</div>
     <h1>${esc(a.name)}</h1>
-    <div class="head-meta"><span class="pill ${week.deload ? 'pill-warn' : ''}">${week.label}</span><span class="pill">${esc(state.profiles[a.profile]?.name || '')}</span></div>
+    <div class="head-meta"><span class="pill ${week.deload ? 'pill-warn' : ''}">${esc(week.label)}</span><span class="pill">${esc(state.profiles[a.profile]?.name || '')}</span></div>
     <div class="progress"><i style="width:${totalSets ? (doneSets / totalSets) * 100 : 0}%"></i></div>
   </header>
   <button class="btn block ghost sm" data-act="toggle-rating">${ui.showRating ? 'Hide' : 'Show'} rating · ${r.grade} (${r.overall})</button>
@@ -351,23 +419,40 @@ function weekChart(rows) {
 function viewProgram() {
   const p = program();
   const L = lib();
-  const resolved = p.days.map(d => E.resolveSlots(d.slots, L, ctx()));
-  const wk = E.rateWeek(resolved, L);
-  const rot = (state.rotation[p.id] || 0) % p.days.length;
+  const week = currentWeek();
+  const cal = calendarMode(p);
+  const resolved = p.days.map(d => E.resolveSlots(daySlots(d, week), L, ctx()));
+  // A rotation longer or shorter than 7 days is scaled to sets per 7 days.
+  const scale = hasRestDays(p) ? 7 / p.days.length : 1;
+  const wk = E.rateWeek(resolved, L, scale);
+  const rot = cal ? calendarPos(p).dayIdx : (state.rotation[p.id] || 0) % p.days.length;
+  const cycles = E.cyclesOf(p);
   return `
   <header class="page-head"><div class="eyebrow">Program</div><h1>${esc(p.name)}</h1>
     <div class="head-meta">
       <select class="pill" data-field="program-select">${Object.values(state.programs).map(x => `<option value="${x.id}" ${x.id === p.id ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}</select>
-      <span class="pill">${currentWeek().label}</span>
+      <span class="pill">${esc(week.label)}</span>
     </div></header>
+  ${p.cycles?.length || cal ? `<section class="card">
+    <div class="card-head"><h2>Schedule</h2><span class="muted">${p.days.length}-day rotation${p.cycles?.length ? ` · ${p.cycles.length} cycles` : ''}</span></div>
+    ${p.cycles?.length && !cal ? `<label class="field">Current cycle <select data-field="cycle-select">${p.cycles.map((c, i) => `<option value="${i}" ${i === week.idx ? 'selected' : ''}>${esc(c.label || `Cycle ${i + 1}`)}</option>`).join('')}</select></label>` : ''}
+    ${cal ? `<p>Day 1 of cycle 1 was <b>${esc(new Date(p.startDate + 'T12:00').toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }))}</b>. Today is day ${rot + 1} of ${esc(week.label)}.</p>
+      <label class="field">Program start date <input type="date" data-field="start-date" value="${esc(p.startDate)}"></label>
+      <div class="row-btns"><button class="btn sm" data-act="shift-start" data-d="1">Push schedule back a day</button><button class="btn sm" data-act="shift-start" data-d="-1">Pull forward a day</button><button class="btn sm ghost" data-act="cal-off">Switch to manual rotation</button></div>`
+      : `<button class="btn sm" data-act="cal-on">Follow a calendar instead</button>`}
+    ${p.cycles?.length ? `<div class="eyebrow mt">Cycles</div><ol class="cycle-list">${p.cycles.map((c, i) => `<li class="${i === week.idx ? 'on' : ''} ${c.deload ? 'deload' : ''}">${esc(c.label || `Cycle ${i + 1}`)}${c.effort ? ` <span class="muted">· ${esc(c.effort)}</span>` : ''}</li>`).join('')}</ol>` : ''}
+  </section>` : ''}
   <section class="card rating">
     <div class="rating-head"><div class="grade ${gradeClass(wk.grade)}">${wk.grade}</div>
-      <div><div class="eyebrow">Weekly volume rating</div><div class="score">${wk.score}<small>/100</small></div><div class="muted">With ${esc(profile().name)} equipment</div></div></div>
+      <div><div class="eyebrow">Weekly volume rating</div><div class="score">${wk.score}<small>/100</small></div><div class="muted">With ${esc(profile().name)} equipment${scale !== 1 ? ` · ${p.days.length}-day cycle scaled to 7 days` : ''}${cycles !== E.MESO ? ` · ${esc(week.label)}` : ''}</div></div></div>
     <div class="mlist"><div class="eyebrow">Hard sets per muscle per week <span class="muted">(shaded = target range)</span></div>${weekChart(wk.rows)}</div>
   </section>
   ${p.days.map((d, i) => {
-    const r = E.rateSession(resolved[i], L, focusMuscles(d));
     const open = ui.editDay === i;
+    if (E.isRestDay(d)) return `<section class="card day rest-day">
+      <div class="day-head static"><span class="grade sm rest">—</span><span class="day-name"><b>${esc(d.name)}</b><span class="muted">Rest${i === rot ? (cal ? ' · today' : ' · next up') : ''}</span></span>
+      <button class="icon" data-act="del-day" data-i="${i}" aria-label="Remove rest day">✕</button></div></section>`;
+    const r = E.rateSession(resolved[i], L, focusMuscles(d));
     return `<section class="card day ${open ? 'open' : ''}">
       <button class="day-head" data-act="edit-day" data-i="${i}">
         <span class="grade sm ${gradeClass(r.grade)}">${r.grade}</span>
@@ -378,7 +463,7 @@ function viewProgram() {
         <div class="day-edit">
           <label class="field">Name <input data-field="day-name" data-i="${i}" value="${esc(d.name)}"></label>
           <label class="field">Focus <select data-field="day-focus" data-i="${i}">${Object.entries(E.FOCUS_LABEL).map(([k, v]) => `<option value="${k}" ${d.focus === k ? 'selected' : ''}>${v}</option>`).join('')}</select></label>
-          ${slotList(d.slots, 'day:' + i)}
+          ${slotList(d.slots.map(s => (s.byCycle ? E.slotFor(s, week.idx) : s)), 'day:' + i)}
           <div class="row-btns">
             <button class="btn sm" data-act="set-next" data-i="${i}">Make next up</button>
             <button class="btn sm" data-act="day-up" data-i="${i}">Move up</button>
@@ -387,7 +472,7 @@ function viewProgram() {
         </div>` : ''}
     </section>`;
   }).join('')}
-  <button class="btn block ghost" data-act="add-day">+ Add day</button>
+  <div class="row-btns"><button class="btn block ghost" data-act="add-day">+ Add day</button><button class="btn block ghost" data-act="add-rest">+ Add rest day</button></div>
   <section class="card">
     <div class="card-head"><h2>Programs</h2></div>
     <div class="row-btns">
@@ -418,12 +503,13 @@ function lineChart(points) {
     <text x="${pl}" y="${H - 6}" class="axis">${esc(points[0].x)}</text>
     <text x="${W - pr}" y="${H - 6}" class="axis" text-anchor="end">${esc(points[points.length - 1].x)}</text>
     <path d="${path}" class="line"/>
-    ${points.map((p, i) => `<circle cx="${x(i)}" cy="${y(p.y)}" r="4" class="dot"/><circle cx="${x(i)}" cy="${y(p.y)}" r="14" class="hit" data-act="pt" data-label="${esc(p.x)}: e1RM ${Math.round(p.y)} ${unit()}${p.best ? ' (' + esc(p.best) + ')' : ''}"/>`).join('')}
+    ${points.map((p, i) => `<circle cx="${x(i)}" cy="${y(p.y)}" r="4" class="dot"/><circle cx="${x(i)}" cy="${y(p.y)}" r="14" class="hit" data-act="pt" data-label="${esc(p.x)}: ${p.timed ? 'best ' + Math.round(p.y) : `e1RM ${Math.round(p.y)} ${unit()}`}${p.best ? ' (' + esc(p.best) + ')' : ''}"/>`).join('')}
   </svg><div class="chart-tip" id="chart-tip">Tap a point for details</div>`;
 }
 
 function viewProgress() {
   const L = lib();
+  ui.progressUnit = null;
   const logged = new Map();
   state.sessions.forEach(s => s.slots.forEach(sl => { if (sl.log.some(x => x.done)) logged.set(sl.ex, (logged.get(sl.ex) || 0) + 1); }));
   const exIds = [...logged.keys()].filter(id => L[id]).sort((a, b) => L[a].name.localeCompare(L[b].name));
@@ -436,12 +522,16 @@ function viewProgress() {
   let chart = '<p class="muted">Finish a workout to start tracking progress.</p>', table = '';
   if (ui.progressEx) {
     const h = history(ui.progressEx).reverse();
+    const u = E.repUnit(L[ui.progressEx]);
+    const timed = u !== 'reps';
     const pts = h.map(e => {
-      const best = e.sets.reduce((b, s) => (E.e1rm(s.w, s.r) > E.e1rm(b.w, b.r) ? s : b), e.sets[0]);
-      return { x: new Date(e.date + 'T12:00').toLocaleDateString(undefined, { month: 'short', day: 'numeric' }), y: E.e1rm(best.w, best.r), best: `${fmtW(best.w)}×${best.r}` };
+      // Holds, carries and passes: chart the best count instead of an estimated 1RM.
+      const best = timed ? e.sets.reduce((b, s) => (s.r > b.r ? s : b), e.sets[0]) : e.sets.reduce((b, s) => (E.e1rm(s.w, s.r) > E.e1rm(b.w, b.r) ? s : b), e.sets[0]);
+      return { x: new Date(e.date + 'T12:00').toLocaleDateString(undefined, { month: 'short', day: 'numeric' }), y: timed ? best.r : E.e1rm(best.w, best.r), best: `${fmtW(best.w)}×${best.r}`, timed };
     }).filter(p => p.y > 0);
+    ui.progressUnit = timed ? u : null;
     chart = lineChart(pts);
-    table = `<table class="tbl"><thead><tr><th>Date</th><th>Sets (${unit()} × reps)</th></tr></thead><tbody>
+    table = `<table class="tbl"><thead><tr><th>Date</th><th>Sets (${unit()} × ${esc(u)})</th></tr></thead><tbody>
       ${h.slice().reverse().slice(0, 12).map(e => `<tr><td>${esc(e.date)}</td><td>${e.sets.map(s => `${fmtW(s.w)}×${s.r}`).join(', ')}</td></tr>`).join('')}</tbody></table>`;
   }
 
@@ -455,7 +545,7 @@ function viewProgress() {
   <section class="card">
     <div class="card-head"><h2>Lift trend</h2></div>
     ${exIds.length ? `<select class="full" data-field="progress-ex">${exIds.map(id => `<option value="${id}" ${id === ui.progressEx ? 'selected' : ''}>${esc(L[id].name)}</option>`).join('')}</select>` : ''}
-    <div class="eyebrow mt">Estimated 1-rep max (${unit()})</div>
+    <div class="eyebrow mt">${ui.progressUnit ? `Best set (${esc(ui.progressUnit)})` : `Estimated 1-rep max (${unit()})`}</div>
     ${chart}
     ${table}
   </section>
@@ -499,11 +589,13 @@ function viewSettings() {
   <section class="card">
     <div class="card-head"><h2>Training</h2></div>
     <div class="eyebrow">Rest days</div>
+    ${hasRestDays(program()) || calendarMode(program()) ? '<p class="muted small">The active program has rest days built into its rotation, so these weekday rest days are ignored for it.</p>' : ''}
     <div class="chips">${DAYS.map((d, i) => `<button class="chip-btn ${state.settings.restDays.includes(i) ? 'on' : ''}" data-act="restday" data-d="${i}">${d}</button>`).join('')}</div>
     <div class="eyebrow mt">Training block</div>
+    ${program().cycles?.length ? `<p class="muted small">“${esc(program().name)}” sets its own cycles. Change the current cycle under Program → Schedule.</p><p>Currently: <b>${esc(currentWeek().label)}</b></p>` : `
     <p class="muted small">5-week blocks: RIR 3 → 2 → 1 → 0–1, then a deload week. Weeks advance as you complete each program rotation.</p>
     <p>Currently: <b>${currentWeek().label}</b></p>
-    <button class="btn sm" data-act="new-block">Start a new block (back to week 1)</button>
+    <button class="btn sm" data-act="new-block">Start a new block (back to week 1)</button>`}
     <div class="eyebrow mt">Units</div>
     <div class="chips">${['lb', 'kg'].map(u => `<button class="chip-btn ${unit() === u ? 'on' : ''}" data-act="unit" data-u="${u}">${u}</button>`).join('')}</div>
   </section>
@@ -624,7 +716,8 @@ function startWorkout(slots, meta) {
   state.active = {
     id: uid(), startedAt: Date.now(), date: todayISO(), taken: [], profile: state.settings.activeProfile,
     ...meta,
-    slots: slots.filter(s => L[s.ex] && !s.missing).map(s => withSuggestion({ ...s }, week)),
+    slots: slots.filter(s => L[s.ex] && !s.missing).map(({ byCycle, ...s }) => withSuggestion({ ...s }, week)),
+    cycle: week.idx,
   };
   save({ sync: false });
   keepAwake(true);
@@ -649,6 +742,7 @@ function finishWorkout() {
   // PR detection by estimated 1RM.
   const prs = [];
   for (const s of done) {
+    if (E.repUnit(L[s.ex]) !== 'reps') continue;
     const best = Math.max(0, ...s.log.filter(x => x.done && x.w && x.r).map(x => E.e1rm(+x.w, +x.r)));
     const prev = Math.max(0, ...history(s.ex).flatMap(h => h.sets.map(x => E.e1rm(x.w, x.r))));
     if (best && prev && best > prev) prs.push(`${L[s.ex].name} (e1RM ${Math.round(best)} ${unit()})`);
@@ -665,7 +759,7 @@ function finishWorkout() {
   if (a.programId && a.dayId && state.programs[a.programId]) {
     const p = state.programs[a.programId];
     const idx = p.days.findIndex(d => d.id === a.dayId);
-    if (idx >= 0) state.rotation[p.id] = (idx + 1) % p.days.length;
+    if (idx >= 0 && !calendarMode(p)) advanceRotation(p, idx);
   }
   state.active = null;
   ui.previewDay = null;
@@ -714,7 +808,15 @@ function exportProgram(p) {
   const L = lib();
   const custom = {};
   p.days.forEach(d => d.slots.forEach(s => { if (L[s.ex]?.custom) custom[s.ex] = state.customExercises[s.ex]; }));
-  return JSON.stringify({ type: 'program', name: p.name, days: p.days.map(({ name, focus, slots }) => ({ name, focus, slots: slots.map(({ ex, sets, reps, rest }) => ({ ex, sets, reps, rest })) })), customExercises: custom }, null, 1);
+  const slotOut = ({ ex, sets, reps, rest, tech, note, group, byCycle }) => ({ ex, sets, reps, rest, ...(tech && { tech }), ...(note && { note }), ...(group && { group }), ...(byCycle && { byCycle }) });
+  const out = {
+    type: 'program', name: p.name,
+    ...(p.cycles?.length && { cycles: p.cycles }),
+    ...(p.startDate && { startDate: p.startDate }),
+    days: p.days.map(({ name, focus, rest, slots }) => (rest ? { name, rest: true } : { name, focus, slots: slots.map(slotOut) })),
+    customExercises: custom,
+  };
+  return JSON.stringify(out, null, 1);
 }
 
 function findByName(name) {
@@ -742,22 +844,44 @@ function doImport(text) {
   Object.assign(state.customExercises, data.customExercises || {});
   const L = lib();
   const problems = [];
-  const days = data.days.map((d, di) => ({
+  const parseReps = r => (Array.isArray(r) ? r.map(Number) : String(r || '8-12').split(/[-–]/).map(Number).concat([NaN]).slice(0, 2).map((v, k, arr) => (isNaN(v) ? (k ? arr[0] : 10) : v)));
+  const resolveEx = (ex, name) => {
+    const id = L[ex] ? ex : findByName(name || ex || '');
+    if (!id) problems.push(name || ex);
+    return id || ex;
+  };
+  const days = data.days.map((d, di) => (d.rest ? { id: uid(), name: d.name || 'Rest', rest: true, slots: [] } : {
     id: uid(), name: d.name || `Day ${di + 1}`, focus: E.FOCUS[d.focus] ? d.focus : 'full', muscles: d.muscles,
     slots: (d.slots || []).map(s => {
-      const id = L[s.ex] ? s.ex : findByName(s.name || s.ex || '');
-      if (!id) problems.push(s.name || s.ex);
+      const id = resolveEx(s.ex, s.name);
       const ex = L[id];
-      return {
-        ex: id || s.ex, sets: +s.sets || 3,
-        reps: Array.isArray(s.reps) ? s.reps.map(Number) : String(s.reps || '8-12').split(/[-–]/).map(Number).concat([NaN]).slice(0, 2).map((v, k, arr) => (isNaN(v) ? (k ? arr[0] : 10) : v)),
-        rest: +s.rest || (ex?.compound ? 150 : 90),
+      const slot = {
+        ex: id, sets: +s.sets || 3, reps: parseReps(s.reps),
+        rest: s.rest != null && !isNaN(+s.rest) ? +s.rest : (ex?.compound ? 150 : 90),
       };
+      if (s.tech) slot.tech = String(s.tech);
+      if (s.note) slot.note = String(s.note);
+      if (s.group) slot.group = String(s.group);
+      if (Array.isArray(s.byCycle)) slot.byCycle = s.byCycle.map(o => {
+        if (!o) return null;
+        const c = { ...o };
+        if (c.ex) c.ex = resolveEx(c.ex, c.name);
+        delete c.name;
+        if (c.reps) c.reps = parseReps(c.reps);
+        if (c.sets != null) c.sets = +c.sets;
+        return c;
+      });
+      return slot;
     }),
   }));
+  if (!days.some(d => !d.rest)) throw new Error('The program has no training days.');
+  const cycles = Array.isArray(data.cycles) ? data.cycles.map((c, i) => ({ label: c.label || `Cycle ${i + 1}`, ...(c.effort && { effort: String(c.effort) }), ...(c.rir != null && { rir: String(c.rir) }), ...(c.deload && { deload: true }) })) : null;
   const id = uid();
-  state.programs[id] = { id, name: data.name || 'Imported program', days };
-  state.rotation[id] = 0;
+  state.programs[id] = { id, name: data.name || 'Imported program', days, ...(cycles?.length && { cycles }), ...(/^\d{4}-\d{2}-\d{2}$/.test(data.startDate || '') && { startDate: data.startDate }) };
+  // Optional starting point for manual-rotation programs (1-based in the file).
+  state.rotation[id] = Math.max(0, Math.min(days.length - 1, (+data.startDay || 1) - 1));
+  state.cycleIdx = state.cycleIdx || {};
+  state.cycleIdx[id] = cycles?.length ? Math.max(0, Math.min(cycles.length - 1, (+data.startCycle || 1) - 1)) : 0;
   state.settings.activeProgram = id;
   save();
   return problems.length ? `Imported. ${problems.length} exercise(s) not recognized: ${problems.join(', ')}. Tap them to choose a match.` : `Imported “${state.programs[id].name}” and set it active.`;
@@ -801,7 +925,7 @@ const actions = {
   video: el => openSheet({ type: 'video', id: el.dataset.ex }),
   'ex-menu': el => openSheet({ type: 'ex-menu', i: +el.dataset.i }),
   sets: el => {
-    const s = getSlots(el.dataset.where)[+el.dataset.i];
+    const s = editTarget(el.dataset.where, +el.dataset.i, 'sets');
     s.sets = Math.max(1, Math.min(10, s.sets + +el.dataset.d));
     persistFor(el.dataset.where); render();
   },
@@ -823,7 +947,8 @@ const actions = {
       if (x.r === '' && s.suggest?.reps) x.r = s.suggest.reps;
       x.done = true;
       const isLast = +el.dataset.j === s.log.length - 1 && +el.dataset.i === state.active.slots.length - 1;
-      if (!isLast) startTimer(s.rest);
+      if (!isLast && s.rest > 0) startTimer(s.rest);
+      else if (!isLast && s.group) toast('No rest: straight to the next exercise.');
     } else x.done = false;
     save({ sync: false }); render();
   },
@@ -863,7 +988,40 @@ const actions = {
   'add-day': () => { const p = program(); p.days.push({ id: uid(), name: `Day ${p.days.length + 1}`, focus: 'full', slots: [] }); ui.editDay = p.days.length - 1; save(); render(); },
   'del-day': el => { const p = program(); if (p.days.length < 2) return toast('A program needs at least one day.'); if (confirm(`Delete ${p.days[+el.dataset.i].name}?`)) { p.days.splice(+el.dataset.i, 1); ui.editDay = null; save(); render(); } },
   'day-up': el => { const d = program().days, i = +el.dataset.i; if (i > 0) { [d[i - 1], d[i]] = [d[i], d[i - 1]]; ui.editDay = i - 1; save(); render(); } },
-  'set-next': el => { state.rotation[program().id] = +el.dataset.i; ui.preview = null; save(); toast('Set as next workout.'); render(); },
+  'rest-done': el => { const p = program(); advanceRotation(p, +el.dataset.i); ui.preview = null; ui.previewDay = null; save(); render(); toast('Rest logged. Next day is up.'); },
+  'add-rest': () => { const p = program(); p.days.push({ id: uid(), name: 'Rest', rest: true, slots: [] }); save(); render(); },
+  'shift-start': el => {
+    const p = program();
+    const d = new Date(p.startDate + 'T12:00'); d.setDate(d.getDate() + +el.dataset.d);
+    p.startDate = d.toLocaleDateString('en-CA'); ui.preview = null; ui.previewDay = null; save(); render();
+    toast(+el.dataset.d > 0 ? 'Schedule pushed back a day.' : 'Schedule pulled forward a day.');
+  },
+  'cal-on': () => {
+    // Keep today's position: today becomes the current rotation day of the current cycle.
+    const p = program();
+    const w = currentWeek();
+    const rot = (state.rotation[p.id] || 0) % p.days.length;
+    const d = new Date(todayISO() + 'T12:00'); d.setDate(d.getDate() - rot - (w.custom ? w.idx : 0) * p.days.length);
+    p.startDate = d.toLocaleDateString('en-CA'); ui.preview = null; save(); render(); toast('Following the calendar from today.');
+  },
+  'cal-off': () => {
+    const p = program();
+    const pos = calendarPos(p);
+    state.rotation[p.id] = pos.dayIdx;
+    state.cycleIdx = state.cycleIdx || {};
+    if (p.cycles?.length) state.cycleIdx[p.id] = Math.min(pos.cycleIdx, p.cycles.length - 1);
+    delete p.startDate; ui.preview = null; save(); render(); toast('Switched to manual rotation.');
+  },
+  'set-next': el => {
+    const p = program();
+    if (calendarMode(p)) {
+      // Move the calendar so the chosen day lands on today, keeping the current cycle.
+      const w = currentWeek();
+      const d = new Date(todayISO() + 'T12:00'); d.setDate(d.getDate() - +el.dataset.i - (w.custom ? w.idx : 0) * p.days.length);
+      p.startDate = d.toLocaleDateString('en-CA');
+    } else state.rotation[p.id] = +el.dataset.i;
+    ui.preview = null; save(); toast(calendarMode(p) ? 'Schedule moved so this day is today.' : 'Set as next workout.'); render();
+  },
   'prog-new': () => { const name = prompt('Program name'); if (!name) return; const id = uid(); state.programs[id] = { id, name, days: [{ id: uid(), name: 'Day 1', focus: 'full', slots: [] }] }; state.rotation[id] = 0; state.settings.activeProgram = id; ui.editDay = 0; save(); render(); },
   'prog-dup': () => { const p = structuredClone(program()); p.id = uid(); p.name += ' (copy)'; state.programs[p.id] = p; state.rotation[p.id] = 0; state.settings.activeProgram = p.id; save(); render(); },
   'prog-rename': () => { const p = program(); const n = prompt('Rename program', p.name); if (n) { p.name = n; save(); render(); } },
@@ -920,9 +1078,9 @@ document.addEventListener('input', e => {
     });
     save({ sync: false });
   } else if (f === 'rlo' || f === 'rhi' || f === 'rest') {
-    const s = getSlots(el.dataset.where)[i];
+    const s = editTarget(el.dataset.where, i, f === 'rest' ? 'rest' : 'reps');
     const v = parseInt(el.value, 10);
-    if (!isNaN(v)) { if (f === 'rest') s.rest = v; else s.reps[f === 'rlo' ? 0 : 1] = v; persistFor(el.dataset.where); }
+    if (!isNaN(v)) { if (f === 'rest') s.rest = v; else { s.reps = [...s.reps]; s.reps[f === 'rlo' ? 0 : 1] = v; } persistFor(el.dataset.where); }
   } else if (f === 'day-name') { program().days[i].name = el.value; save(); }
   else if (f === 'profile-name') { profile().name = el.value; save(); }
   else if (f === 'gist-token') setGist({ token: el.value.trim() });
@@ -940,6 +1098,8 @@ document.addEventListener('change', e => {
     profile().equip = el.checked ? [...new Set([...eq, id])] : eq.filter(x => x !== id);
     ui.preview = null; save();
   } else if (f === 'program-select') { state.settings.activeProgram = el.value; ui.editDay = null; ui.preview = null; save(); render(); }
+  else if (f === 'cycle-select') { state.cycleIdx = state.cycleIdx || {}; state.cycleIdx[program().id] = +el.value; ui.preview = null; save(); render(); }
+  else if (f === 'start-date') { if (/^\d{4}-\d{2}-\d{2}$/.test(el.value)) { program().startDate = el.value; ui.preview = null; save(); render(); } }
   else if (f === 'day-focus') { program().days[+el.dataset.i].focus = el.value; save(); render(); }
   else if (f === 'progress-ex') { ui.progressEx = el.value; render(); }
   else if (f === 'sheet-all') { ui.sheet.all = el.checked; renderSheet(); }

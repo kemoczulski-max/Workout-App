@@ -47,6 +47,26 @@ Format:
 - `ex` must be an id from `js/exercises.js` or a key in `customExercises`. If the id is missing, the app tries to match on `name`.
 - Muscle weights: `1` = prime mover, `0.5` = synergist, `0.25` = minor. `len` and `sfr` are scored 1–5.
 
+### Optional program features
+| Field | Where | What it does |
+|---|---|---|
+| `{"name": "Rest", "rest": true}` | `days[]` | A rest day inside the rotation. The weekday rest-day setting is ignored for programs that have these. |
+| `tech` | slot | Intensity technique shown in gold (e.g. "Myo-Reps (final set)"). |
+| `note` | slot | Coaching cues, shown under a "Cues" toggle. |
+| `group` | slot | Superset / giant-set label (e.g. "A1"). Use `"rest": 0` to go straight to the next exercise with no timer. |
+| `unit` | custom exercise | What the reps column counts: `"sec"`, `"passes"`, `"strides"`, `"reps/side"`, etc. Progress charts the best count instead of an estimated 1RM. |
+| `cycles` | program | `[{ "label", "effort", "deload" }]`. Replaces the built-in 5-week block. `effort` is the target shown on each exercise (e.g. "RPE 8 → 9"). |
+| `byCycle` | slot | One entry per cycle overriding `sets`, `reps`, `rest`, `ex`, `tech` or `note` for that cycle. Deload volume comes from here, not from automatic halving. |
+| `startDate` | program | `"YYYY-MM-DD"` for Day 1 of Cycle 1. Today's workout and cycle follow the calendar. Skipped a day? Program → Schedule → "Push schedule back a day". |
+| `startCycle`, `startDay` | program | 1-based starting point when the program has no `startDate`. |
+
+Example slot using several of these:
+```json
+{ "ex": "pec_deck_fly", "sets": 3, "reps": [12, 15], "rest": 0, "group": "A1",
+  "note": "Take it to RPE 9, then go straight to A2.",
+  "byCycle": [{ "sets": 3, "tech": "" }, { "sets": 3, "tech": "Superset with A2" }] }
+```
+
 ## Files
 - `js/exercises.js`: exercise library (muscles, equipment, stretch and SFR scores)
 - `js/programs.js`: default 6-day PPL program

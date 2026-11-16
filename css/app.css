@@ -250,3 +250,21 @@ textarea.full { resize: vertical; font-size: 14px; }
 @media (max-width: 380px) {
   .mrow { grid-template-columns: 78px 1fr 30px 70px; font-size: 12px; }
 }
+
+/* ---------- program extras: technique, cues, supersets, rest days, cycles ---------- */
+.tech { font-size: 13px; color: var(--accent); margin-top: 6px; }
+.cue { margin-top: 6px; font-size: 13px; color: var(--ink-2); }
+.cue summary { cursor: pointer; color: var(--muted); font-weight: 600; list-style: none; }
+.cue summary::before { content: '▸ '; }
+.cue[open] summary::before { content: '▾ '; }
+.cue p { margin: 6px 0 0; line-height: 1.45; }
+.chip.grp { background: var(--accent-dim); color: var(--accent); }
+.rest-day { opacity: 0.75; }
+.day-head.static { cursor: default; }
+.grade.rest { background: var(--surface-2); color: var(--muted); }
+.cycle-list { margin: 6px 0 0; padding-left: 22px; font-size: 14px; color: var(--ink-2); }
+.cycle-list li { padding: 2px 0; }
+.cycle-list li.on { color: var(--accent); font-weight: 700; }
+.cycle-list li.deload { color: var(--warn); }
+.cycle-list li.on.deload { color: var(--accent); }
+.row-btns > .btn.block { flex: 1; }

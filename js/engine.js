@@ -151,11 +151,12 @@ export function rateExercise(ex) {
   return { score: q, grade: grade(q) };
 }
 
-export function rateWeek(days, lib) {
+// scale: converts one pass through the rotation to a 7-day week (e.g. 0.7 for a 10-day cycle).
+export function rateWeek(days, lib, scale = 1) {
   const total = {};
   for (const d of days) {
     const s = muscleSets(d, lib);
-    for (const m in s) total[m] = (total[m] || 0) + s[m];
+    for (const m in s) total[m] = (total[m] || 0) + s[m] * scale;
   }
   const rows = Object.keys(MUSCLES)
     .filter(m => !['forearms', 'lower_back'].includes(m))
@@ -252,8 +253,29 @@ export const MESO = [
 
 export function mesoWeek(sessionsInMeso, daysPerWeek) {
   const w = Math.floor(sessionsInMeso / Math.max(1, daysPerWeek)) % MESO.length;
-  return MESO[w];
+  return { ...MESO[w], idx: w };
 }
+
+// A program may define its own cycles: [{ label, rir?, effort?, deload? }]. Otherwise the 5-week block applies.
+export const cyclesOf = p => (p?.cycles?.length ? p.cycles : MESO);
+
+// Days that are rest days in the program's own rotation.
+export const isRestDay = d => !!d?.rest;
+export const trainingDays = p => p.days.filter(d => !d.rest);
+
+// Apply a slot's per-cycle overrides (sets, reps, rest, ex, tech, note) for cycle index `idx`.
+export function slotFor(slot, idx) {
+  const o = slot.byCycle?.[idx];
+  if (!o) return { ...slot };
+  const out = { ...slot, ...o };
+  delete out.byCycle;
+  out.byCycle = slot.byCycle;
+  return out;
+}
+
+// Label for the rep column: "reps" unless the exercise is logged in seconds, passes, etc.
+export const repUnit = ex => ex?.unit || 'reps';
+export const fmtRange = ([lo, hi]) => (lo === hi ? `${lo}` : `${lo}–${hi}`);
 
 export const roundTo = (w, step) => (step ? Math.round(w / step) * step : w);
 export const e1rm = (w, r) => (w && r ? w * (1 + r / 30) : 0);
@@ -261,10 +283,12 @@ export const e1rm = (w, r) => (w && r ? w * (1 + r / 30) : 0);
 // history: array of past performances of this exercise, newest first: [{ sets: [{w, r}] }]
 export function suggest(ex, slot, history, week) {
   const [lo, hi] = slot.reps;
-  const sets = week?.deload ? Math.max(1, Math.ceil(slot.sets / 2)) : slot.sets;
+  // Programs with their own cycles set deload volume per slot, so only the built-in block halves sets.
+  const sets = week?.deload && !week.custom ? Math.max(1, Math.ceil(slot.sets / 2)) : slot.sets;
+  const u = repUnit(ex);
   const last = history[0];
   if (!last || !last.sets.length) {
-    return { sets, weight: null, reps: lo, note: `First time: pick a load you can lift for ${hi} reps, stopping ${week?.rir || 2} reps short of failure.` };
+    return { sets, weight: null, reps: lo, note: u === 'reps' ? `First time: pick a load you can lift for ${hi} reps, ${week?.effort ? 'at ' + week.effort : `stopping ${week?.rir || 2} reps short of failure`}.` : `First time: pick a load you can hold for about ${lo} ${u}.` };
   }
   const work = last.sets.filter(s => s.w != null && s.r);
   if (!work.length) return { sets, weight: null, reps: lo, note: 'No logged weight last time.' };
@@ -274,16 +298,16 @@ export function suggest(ex, slot, history, week) {
   const inc = ex.inc ?? 5;
 
   if (week?.deload) {
-    return { sets, weight: roundTo(topW * 0.9, inc || 1), reps: lo, note: 'Deload: half the sets, about 90% load, easy reps.' };
+    return { sets, weight: topW ? roundTo(topW * 0.9, inc || 1) : null, reps: lo, note: week.custom ? 'Deload: about 90% load, easy reps, no intensity techniques.' : 'Deload: half the sets, about 90% load, easy reps.' };
   }
   if (minReps >= hi && inc) {
-    return { sets, weight: topW + inc, reps: lo, note: `Hit ${hi}+ reps on every set last time. Add ${inc} lb.` };
+    return { sets, weight: topW + inc, reps: lo, note: `Hit ${hi}+ ${u} on every set last time. Add ${inc} lb.` };
   }
   if (!inc) {
-    return { sets, weight: topW || null, reps: Math.min(hi + 5, minReps + 1), note: `Beat last time: aim for ${minReps + 1}+ reps.` };
+    return { sets, weight: topW || null, reps: Math.min(hi + 5, minReps + 1), note: `Beat last time: aim for ${minReps + 1}+ ${u}.` };
   }
   const target = Math.min(hi, minReps + 1);
-  return { sets, weight: topW, reps: target, note: `Same load, aim for ${target} reps (last: ${atTop.map(s => s.r).join('/')}).` };
+  return { sets, weight: topW, reps: target, note: `Same load, aim for ${target} ${u} (last: ${atTop.map(s => s.r).join('/')}).` };
 }
 
 export function warmups(ex, weight) {
