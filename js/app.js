@@ -255,6 +255,19 @@ function pushOnShow() {
 document.addEventListener('visibilitychange', () => (document.visibilityState === 'hidden' ? pushOnHide() : pushOnShow()));
 window.addEventListener('pagehide', pushOnHide);
 
+// Live workout clock (elapsed since Start), always on screen during a workout.
+const fmtClock = ms => { const t = Math.max(0, Math.floor(ms / 1000)), h = Math.floor(t / 3600), m = Math.floor(t / 60) % 60, sec = t % 60; return `${h ? h + ':' + String(m).padStart(2, '0') : m}:${String(sec).padStart(2, '0')}`; };
+function tickClock() {
+  const el = $('#clock');
+  if (!state.active) { el.hidden = true; return; }
+  el.hidden = false;
+  const t = fmtClock(Date.now() - state.active.startedAt);
+  el.textContent = '⏱ ' + t;
+  const h = document.getElementById('elapsed');
+  if (h) h.textContent = t;
+}
+setInterval(tickClock, 1000);
+
 async function keepAwake(on) {
   try {
     if (on && 'wakeLock' in navigator && !wakeLock) {
@@ -442,7 +455,6 @@ function viewActive() {
   const L = lib();
   const week = currentWeek(a.programId);
   const r = E.rateSession(a.slots.map(s => ({ ...s, sets: workSets(s.log).length })), L, a.focus);
-  const elapsed = Math.floor((Date.now() - a.startedAt) / 60000);
   const doneSets = a.slots.reduce((n, s) => n + workSets(s.log).filter(x => x.done).length, 0);
   const totalSets = a.slots.reduce((n, s) => n + workSets(s.log).length, 0);
 
@@ -499,7 +511,7 @@ function viewActive() {
 
   return `
   <header class="page-head">
-    <div class="eyebrow">In progress · ${elapsed} min · ${doneSets}/${totalSets} sets</div>
+    <div class="eyebrow">In progress · <span id="elapsed">${fmtClock(Date.now() - a.startedAt)}</span> · ${doneSets}/${totalSets} sets</div>
     <h1>${esc(a.name)}</h1>
     <div class="head-meta"><span class="pill ${week.deload ? 'pill-warn' : ''}">${esc(week.label)}</span><span class="pill">${esc(state.profiles[a.profile]?.name || '')}</span></div>
     <div class="progress"><i style="width:${totalSets ? (doneSets / totalSets) * 100 : 0}%"></i></div>
@@ -889,6 +901,7 @@ function render({ keepScroll = true } = {}) {
   renderSheet();
   if (keepScroll) window.scrollTo(0, y);
   tickTimer();
+  tickClock();
 }
 function renderSheet() {
   const root = $('#sheet-root');
