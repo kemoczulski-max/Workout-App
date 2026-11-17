@@ -133,21 +133,58 @@ let timerInt = null;
 let wakeLock = null;
 let audioCtx = null;
 
-function beep() {
+// Short sounds should play like a notification, ducking music instead of stopping it.
+try { if (navigator.audioSession) navigator.audioSession.type = 'transient'; } catch {}
+
+// Three-note chime, played twice.
+function chime() {
   try {
     audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
-    const o = audioCtx.createOscillator(), g = audioCtx.createGain();
-    o.connect(g); g.connect(audioCtx.destination);
-    o.frequency.value = 880; g.gain.value = 0.15;
-    o.start(); o.stop(audioCtx.currentTime + 0.35);
+    audioCtx.resume();
+    const t0 = audioCtx.currentTime + 0.02;
+    [0, 1.1].forEach(rep => [[660, 0], [880, 0.16], [1175, 0.32]].forEach(([f, d]) => {
+      const o = audioCtx.createOscillator(), g = audioCtx.createGain();
+      o.type = 'triangle'; o.frequency.value = f;
+      o.connect(g); g.connect(audioCtx.destination);
+      const t = t0 + rep + d;
+      g.gain.setValueAtTime(0.0001, t);
+      g.gain.exponentialRampToValueAtTime(0.6, t + 0.02);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + 0.45);
+      o.start(t); o.stop(t + 0.5);
+    }));
   } catch {}
-  navigator.vibrate?.([200, 100, 200]);
+  navigator.vibrate?.([300, 120, 300]);
 }
+
+// The next set to do, for the banner.
+function nextSetText() {
+  const a = state.active;
+  if (!a) return '';
+  const L = lib();
+  for (const s of a.slots) {
+    const j = s.log.findIndex(x => !x.done);
+    if (j < 0) continue;
+    const x = s.log[j];
+    const what = x.sub ? (E.techOf(x.sub)?.short || 'next row') : x.warm ? 'warm-up' : `set ${workSets(s.log.slice(0, j + 1)).length}`;
+    return `Next: ${L[s.ex]?.name || ''}, ${what}`;
+  }
+  return 'All sets done. Finish the workout.';
+}
+
+function restOver() {
+  chime();
+  const el = $('#rest-alert');
+  $('#rest-alert-next').textContent = nextSetText();
+  el.hidden = false;
+  el.classList.remove('pop'); void el.offsetWidth; el.classList.add('pop');
+}
+function hideRestAlert() { const el = $('#rest-alert'); if (el) el.hidden = true; }
 
 function startTimer(sec) {
   if (!state.active) return;
   state.active.timerEnd = Date.now() + sec * 1000;
   state.active.timerTotal = sec;
+  hideRestAlert();
   save({ sync: false });
   // Unlock audio on iOS inside the user gesture.
   try { audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)(); audioCtx.resume(); } catch {}
@@ -167,8 +204,7 @@ function tickTimer() {
       a.timerEnd = null;
       save({ sync: false });
       clearInterval(timerInt);
-      beep();
-      toast('Rest over. Next set.');
+      restOver();
       return;
     }
     $('#timer-time').textContent = `${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')}`;
@@ -1163,6 +1199,7 @@ const actions = {
     persistFor(el.dataset.where); if (el.dataset.close) closeSheet(); render();
   },
   done: el => {
+    hideRestAlert();
     const s = state.active.slots[+el.dataset.i];
     const x = s.log[+el.dataset.j];
     const j = +el.dataset.j;
@@ -1230,6 +1267,7 @@ const actions = {
   finish: () => finishWorkout(),
   discard: () => { if (confirm('Discard this workout? Logged sets will be lost.')) { state.active = null; save({ sync: false }); keepAwake(false); render(); } },
   'timer-add': el => { if (state.active?.timerEnd) { state.active.timerEnd += +el.dataset.s * 1000; state.active.timerTotal += +el.dataset.s; tickTimer(); } },
+  'rest-alert-ok': () => hideRestAlert(),
   'timer-skip': () => { if (state.active) { state.active.timerEnd = null; save({ sync: false }); tickTimer(); } },
   // build
   'b-focus': el => { ui.build.focus = el.dataset.k; ui.build.muscles = [...E.FOCUS[el.dataset.k]]; ui.build.slots = null; render(); },
