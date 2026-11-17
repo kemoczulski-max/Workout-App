@@ -1,6 +1,6 @@
 import { MUSCLES, EQUIPMENT, PATTERNS } from './exercises.js';
 import * as E from './engine.js';
-import { state, save, uid, todayISO, gist, setGist, syncNow, onSync, syncStatus, replaceState, resetAll, dropbox, setDropbox, clearDropbox, connectDropbox, finishDropboxLogin, saveToDropbox } from './store.js';
+import { state, save, uid, todayISO, gist, setGist, syncNow, onSync, syncStatus, replaceState, resetAll, dropbox, setDropbox, clearDropbox, connectDropbox, finishDropboxCode, saveToDropbox } from './store.js';
 
 // ================= helpers =================
 const $ = sel => document.querySelector(sel);
@@ -670,15 +670,18 @@ function viewSettings() {
   <section class="card">
     <div class="card-head"><h2>Dropbox</h2><span class="sync-dot s-${dropbox().refresh ? (st.state === 'error' ? 'error' : 'ok') : 'off'}">${dropbox().refresh ? 'Connected' : 'Off'}</span></div>
     <p class="muted small">Saves your data to Dropbox → Apps → (your app name) every time it changes, plus one dated backup per day in a <b>backups</b> folder. Exports can be saved there too. Works alongside the Gist or on its own.</p>
-    ${dropbox().refresh ? `<div class="row-btns"><button class="btn sm primary" data-act="sync">Sync now</button><button class="btn sm danger-ghost" data-act="dropbox-clear">Disconnect</button></div>` : `
+    ${dropbox().error ? `<div class="banner warn">${esc(dropbox().error)}</div>` : ''}
+    ${dropbox().refresh ? `<p class="muted small">${dropbox().at ? `Last saved ${new Date(dropbox().at).toLocaleString()}.` : 'Not saved yet. Tap Sync now.'}</p>
+    <div class="row-btns"><button class="btn sm primary" data-act="sync">Sync now</button><button class="btn sm danger-ghost" data-act="dropbox-clear">Disconnect</button></div>` : `
     <details class="cue"><summary>One-time setup (about 2 minutes)</summary><ol class="small">
-      <li>On a computer, go to <b>dropbox.com/developers/apps</b> → <b>Create app</b>.</li>
-      <li>Pick <b>Scoped access</b> and <b>App folder</b>. Name it anything unique (e.g. Lift-yourname).</li>
+      <li>Go to <b>dropbox.com/developers/apps</b> → <b>Create app</b>.</li>
+      <li>Pick <b>Scoped access</b> and <b>App folder</b>. Name it anything unique.</li>
       <li><b>Permissions</b> tab: tick <b>files.content.write</b> and <b>files.content.read</b>, then Submit.</li>
-      <li><b>Settings</b> tab → OAuth 2 Redirect URIs: add <b>${esc(location.origin + location.pathname)}</b></li>
-      <li>Copy the <b>App key</b> from the Settings tab and paste it below.</li></ol></details>
+      <li>Copy the <b>App key</b> from the Settings tab and paste it below. No redirect URI is needed.</li></ol></details>
     <label class="field">App key <input autocomplete="off" data-field="dropbox-key" value="${esc(dropbox().appKey || '')}" placeholder="From the Dropbox App Console"></label>
-    <button class="btn sm primary" data-act="dropbox-connect">Connect Dropbox</button>`}
+    <button class="btn sm primary" data-act="dropbox-connect">1. Get code from Dropbox</button>
+    <label class="field mt">Code <input autocomplete="off" data-field="dropbox-code" placeholder="Paste the code Dropbox shows you"></label>
+    <button class="btn sm primary" data-act="dropbox-finish">2. Finish connecting</button>`}
   </section>
   <section class="card">
     <div class="card-head"><h2>Data</h2></div>
@@ -1279,7 +1282,18 @@ const actions = {
   'copy-export': async () => { try { await navigator.clipboard.writeText(ui.sheet.text); toast('Copied.'); } catch { toast('Copy failed. Select the text and copy it manually.'); } },
   'download-export': () => download(ui.sheet.file, ui.sheet.text),
   'dropbox-export': async () => { try { await saveToDropbox('/exports/' + ui.sheet.file, ui.sheet.text); toast('Saved to Dropbox.'); } catch (e) { toast(e.message); } },
-  'dropbox-connect': async () => { try { await connectDropbox(); } catch (e) { toast(e.message); } },
+  'dropbox-connect': async () => {
+    // Open the window inside the tap so iOS doesn't block it, then point it at Dropbox.
+    const w = window.open('', '_blank');
+    try { const url = await connectDropbox(); if (w) w.location.href = url; else location.href = url; }
+    catch (e) { w?.close(); toast(e.message); }
+  },
+  'dropbox-finish': async () => {
+    const code = document.querySelector('[data-field="dropbox-code"]')?.value || '';
+    if (!code.trim()) return toast('Paste the code from Dropbox first.');
+    try { await finishDropboxCode(code); toast('Dropbox connected. Saving…'); render(); await syncNow(); render(); toast('Saved to Dropbox.'); }
+    catch (e) { render(); toast(e.message); }
+  },
   'dropbox-clear': () => { if (confirm('Disconnect Dropbox on this device? Files already in Dropbox stay there.')) { clearDropbox(); render(); } },
   // progress
   pt: el => { $('#chart-tip').textContent = el.dataset.label; },
@@ -1368,6 +1382,5 @@ onSync(() => { if (ui.view === 'settings') render(); });
 migrateCalendar();
 render({ keepScroll: false });
 if (state.active) keepAwake(true);
-finishDropboxLogin().then(ok => { if (ok) { ui.view = 'settings'; toast('Dropbox connected.'); return syncNow().then(() => render()); } }).catch(e => toast(e.message));
 if (gist().token || dropbox().refresh) syncNow().then(() => { migrateCalendar(); ui.preview = null; render(); }).catch(() => {});
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js').catch(() => {});

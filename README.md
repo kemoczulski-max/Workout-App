@@ -20,7 +20,7 @@ A workout app for iPhone that you add to your Home Screen. It runs entirely in t
 3. (Optional) To sync, go to github.com → Settings → Developer settings → Personal access tokens → **Tokens (classic)** → generate a token with only the `gist` scope. Paste it in the app under **Setup → Sync**.
 
 ## Dropbox (optional)
-Setup → Dropbox has the steps: create a Dropbox app with *App folder* access, add the app's URL as a redirect URI, paste the App key and tap Connect. Data saves to `Dropbox/Apps/<app name>/workout-app-data.json` on every change, with one dated copy per day in `backups/`. Exports can be saved to `exports/`.
+Setup → Dropbox has the steps: create a Dropbox app with *App folder* access, paste the App key, tap *Get code from Dropbox*, then paste the code Dropbox shows back into the app. Data saves to `Dropbox/Apps/<app name>/workout-app-data.json` on every change, with one dated copy per day in `backups/`. Exports can be saved to `exports/`.
 
 ## Importing a program (e.g. from a PDF)
 Upload the PDF to Claude and ask: *"Convert this into a Lift app program import."* Paste the result into **Program → Import**.

@@ -180,17 +180,18 @@ export function dropbox() {
 }
 export function setDropbox(d) { localStorage.setItem(DBX_KEY, JSON.stringify({ ...dropbox(), ...d })); }
 export function clearDropbox() { const { appKey } = dropbox(); localStorage.setItem(DBX_KEY, JSON.stringify({ appKey })); }
-const redirectUri = () => location.origin + location.pathname;
 const b64url = buf => btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 
+// Sign-in without a redirect: Dropbox shows a code, you paste it back into the app. This works
+// from an iPhone home-screen app, where a redirect would land in Safari's separate storage.
 export async function connectDropbox() {
   const { appKey } = dropbox();
   if (!appKey) throw new Error('Paste your Dropbox app key first.');
   const verifier = b64url(crypto.getRandomValues(new Uint8Array(48)));
   const challenge = b64url(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier)));
-  setDropbox({ verifier });
-  const q = new URLSearchParams({ client_id: appKey, response_type: 'code', code_challenge: challenge, code_challenge_method: 'S256', token_access_type: 'offline', redirect_uri: redirectUri() });
-  location.href = 'https://www.dropbox.com/oauth2/authorize?' + q;
+  setDropbox({ verifier, error: null });
+  const q = new URLSearchParams({ client_id: appKey, response_type: 'code', code_challenge: challenge, code_challenge_method: 'S256', token_access_type: 'offline' });
+  return 'https://www.dropbox.com/oauth2/authorize?' + q;
 }
 
 async function dbxToken(params) {
@@ -200,22 +201,18 @@ async function dbxToken(params) {
   return j;
 }
 
-// Called on boot: finishes the sign-in when Dropbox redirects back with ?code=.
-export async function finishDropboxLogin() {
-  const code = new URLSearchParams(location.search).get('code');
-  if (!code) return false;
-  history.replaceState(null, '', redirectUri());
+export async function finishDropboxCode(code) {
   const { verifier } = dropbox();
-  if (!verifier) return false;
-  const j = await dbxToken({ grant_type: 'authorization_code', code, code_verifier: verifier, redirect_uri: redirectUri() });
-  setDropbox({ refresh: j.refresh_token, access: j.access_token, exp: Date.now() + (j.expires_in - 60) * 1000, verifier: null });
-  return true;
+  if (!verifier) throw new Error('Tap "Get code from Dropbox" first, then paste the code here.');
+  const j = await dbxToken({ grant_type: 'authorization_code', code: code.trim(), code_verifier: verifier });
+  setDropbox({ refresh: j.refresh_token, access: j.access_token, exp: Date.now() + (j.expires_in - 60) * 1000, verifier: null, error: null });
 }
 
 async function dbxAccess() {
   const d = dropbox();
   if (d.access && d.exp > Date.now()) return d.access;
-  const j = await dbxToken({ grant_type: 'refresh_token', refresh_token: d.refresh });
+  let j;
+  try { j = await dbxToken({ grant_type: 'refresh_token', refresh_token: d.refresh }); } catch (e) { setDropbox({ error: e.message }); throw e; }
   setDropbox({ access: j.access_token, exp: Date.now() + (j.expires_in - 60) * 1000 });
   return j.access_token;
 }
@@ -240,16 +237,20 @@ export async function pushDropbox() {
   if (!dropbox().refresh) return;
   setSyncStatus('syncing');
   const data = payload();
-  await saveToDropbox(DBX_FILE, data);
-  // One dated copy per day, so a bad change can be rolled back.
-  await saveToDropbox(`/backups/workout-backup-${todayISO()}.json`, data);
+  try {
+    await saveToDropbox(DBX_FILE, data);
+    // One dated copy per day, so a bad change can be rolled back.
+    await saveToDropbox(`/backups/workout-backup-${todayISO()}.json`, data);
+  } catch (e) { setDropbox({ error: e.message }); throw e; }
+  setDropbox({ error: null, at: Date.now() });
   setSyncStatus('ok', 'Saved to Dropbox');
 }
 
 export async function pullDropbox() {
   if (!dropbox().refresh) return false;
   setSyncStatus('syncing');
-  const res = await dbxContent('download', { path: DBX_FILE });
+  let res;
+  try { res = await dbxContent('download', { path: DBX_FILE }); } catch (e) { setDropbox({ error: e.message }); throw e; }
   if (res) { merge(JSON.parse(await res.text())); save({ sync: false }); }
   await pushDropbox();
   return true;
