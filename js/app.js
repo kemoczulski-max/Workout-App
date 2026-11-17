@@ -1,6 +1,6 @@
 import { MUSCLES, EQUIPMENT, PATTERNS } from './exercises.js';
 import * as E from './engine.js';
-import { state, save, uid, todayISO, gist, setGist, syncNow, onSync, syncStatus, replaceState, resetAll } from './store.js';
+import { state, save, uid, todayISO, gist, setGist, syncNow, onSync, syncStatus, replaceState, resetAll, dropbox, setDropbox, clearDropbox, connectDropbox, finishDropboxLogin, saveToDropbox } from './store.js';
 
 // ================= helpers =================
 const $ = sel => document.querySelector(sel);
@@ -104,7 +104,7 @@ function history(exId) {
   for (let i = state.sessions.length - 1; i >= 0; i--) {
     const s = state.sessions[i];
     for (const sl of s.slots) if (sl.ex === exId) {
-      const sets = sl.log.filter(x => x.done && x.r && !x.sub).map(x => ({ w: x.w === '' || x.w == null ? null : +x.w, r: +x.r }));
+      const sets = sl.log.filter(x => x.done && x.r && !x.sub && !x.warm).map(x => ({ w: x.w === '' || x.w == null ? null : +x.w, r: +x.r }));
       if (sets.length) out.push({ date: s.date, sets });
     }
   }
@@ -364,17 +364,17 @@ function viewActive() {
   const a = state.active;
   const L = lib();
   const week = currentWeek(a.programId);
-  const r = E.rateSession(a.slots.map(s => ({ ...s, sets: mainSets(s.log).length })), L, a.focus);
+  const r = E.rateSession(a.slots.map(s => ({ ...s, sets: workSets(s.log).length })), L, a.focus);
   const elapsed = Math.floor((Date.now() - a.startedAt) / 60000);
-  const doneSets = a.slots.reduce((n, s) => n + mainSets(s.log).filter(x => x.done).length, 0);
-  const totalSets = a.slots.reduce((n, s) => n + mainSets(s.log).length, 0);
+  const doneSets = a.slots.reduce((n, s) => n + workSets(s.log).filter(x => x.done).length, 0);
+  const totalSets = a.slots.reduce((n, s) => n + workSets(s.log).length, 0);
 
   const cards = a.slots.map((s, i) => {
     const ex = L[s.ex];
     if (!ex) return '';
     const er = E.rateExercise(ex);
     const u = E.repUnit(ex);
-    const workW = s.log.find(x => x.w !== '' && x.w != null)?.w || s.suggest?.weight;
+    const workW = s.log.find(x => !x.warm && !x.sub && x.w !== '' && x.w != null)?.w || s.suggest?.weight;
     const wu = E.warmups(ex, +workW);
     const allDone = s.log.length && s.log.every(x => x.done);
     let n = 0;
@@ -383,7 +383,7 @@ function viewActive() {
       <div class="ex-head">
         <div>
           <div class="slot-title">${groupTag(s)}<span class="chip ${gradeClass(er.grade)}">${er.grade}</span> <b>${esc(ex.name)}</b></div>
-          <div class="muted">${E.fmtRange(s.reps)} ${esc(u)} · ${restText(s)} · ${esc(effortText(week))}</div>
+          <div class="muted">${E.fmtRange(s.reps)} ${esc(u)} · <button class="rest-btn" data-act="rest-edit" data-i="${i}" aria-label="Change rest time">⏱ ${restText(s)}</button> · ${esc(effortText(week))}</div>
           ${slotExtras(s)}
           ${s.subbedFrom ? `<div class="subbed">↺ Swapped from ${esc(L[s.subbedFrom]?.name || s.subbedFrom)}</div>` : ''}
         </div>
@@ -396,19 +396,22 @@ function viewActive() {
         ${s.log.map((x, j) => {
           const T = E.techOf(x.sub || x.t);
           const label = x.sub ? `<span class="set-n sub" title="${esc(T?.label || '')}">${esc(T?.short || x.sub)}</span>`
-            : `<button class="set-n tap ${x.t ? 'has-t' : ''}" data-act="set-tech" data-i="${i}" data-j="${j}" aria-label="Set ${n + 1} technique">${++n}</button>`;
-          const rph = x.sub ? (T?.reps ?? '') : (s.suggest?.reps ?? '');
+            : x.warm ? `<button class="set-n tap warm" data-act="set-tech" data-i="${i}" data-j="${j}" aria-label="Warm-up set options">W</button>`
+            : `<button class="set-n tap ${x.t ? 'has-t' : ''}" data-act="set-tech" data-i="${i}" data-j="${j}" aria-label="Set ${n + 1} options">${++n}</button>`;
+          const wIdx = x.warm ? s.log.slice(0, j).filter(y => y.warm).length : -1;
+          const rph = x.sub ? (T?.reps ?? '') : x.warm ? (wu[wIdx]?.r ?? '') : (s.suggest?.reps ?? '');
           return `
-        <div class="set-row ${x.done ? 'is-done' : ''} ${x.sub ? 'sub-row' : ''}">
+        <div class="set-row ${x.done ? 'is-done' : ''} ${x.sub ? 'sub-row' : ''} ${x.warm ? 'warm-row' : ''}">
           ${label}
-          <input inputmode="decimal" data-field="w" data-i="${i}" data-j="${j}" value="${x.w ?? ''}" placeholder="${x.sub ? '' : s.suggest?.weight ?? '—'}">
+          <input inputmode="decimal" data-field="w" data-i="${i}" data-j="${j}" value="${x.w ?? ''}" placeholder="${x.sub ? '' : x.warm ? (wu[wIdx]?.w ?? '') : s.suggest?.weight ?? '—'}">
           <input inputmode="numeric" data-field="r" data-i="${i}" data-j="${j}" value="${x.r ?? ''}" placeholder="${rph}">
           <button class="check ${x.done ? 'on' : ''}" data-act="done" data-i="${i}" data-j="${j}" aria-label="Complete set">✓</button>
         </div>${!x.sub && T ? `<div class="set-tech"><span class="chip grp">${esc(T.short)}</span> <span class="muted">${esc(x.t === 'drop' ? `Strip ~${x.pct || T.pct}% and go again, no rest` : T.desc)}</span></div>` : ''}`;
         }).join('')}
       </div>
-      <p class="muted small set-hint">Tap a set number to add a drop set, myo-reps, rest-pause and more.</p>
+      <p class="muted small set-hint">Tap a set number to make it a warm-up or add a drop set, myo-reps, rest-pause and more.</p>
       <div class="row-btns">
+        <button class="btn sm ghost" data-act="add-warm" data-i="${i}">+ Warm-up</button>
         <button class="btn sm ghost" data-act="add-set" data-i="${i}">+ Set</button>
         <button class="btn sm ghost" data-act="del-set" data-i="${i}">− Set</button>
         <button class="btn sm" data-act="taken" data-where="active" data-i="${i}">Taken</button>
@@ -574,7 +577,7 @@ function viewProgress() {
 
   const weekAgo = Date.now() - 7 * 864e5;
   const recent = state.sessions.filter(s => s.finishedAt > weekAgo);
-  const weekSets = recent.reduce((n, s) => n + s.slots.reduce((m, sl) => m + sl.log.filter(x => x.done && !x.sub).length, 0), 0);
+  const weekSets = recent.reduce((n, s) => n + s.slots.reduce((m, sl) => m + sl.log.filter(x => x.done && !x.sub && !x.warm).length, 0), 0);
 
   let chart = '<p class="muted">Finish a workout to start tracking progress.</p>', table = '';
   if (ui.progressEx) {
@@ -611,7 +614,7 @@ function viewProgress() {
     ${state.sessions.slice().reverse().slice(0, 20).map(s => `
       <div class="hist-row">
         <span class="grade sm ${gradeClass(s.rating?.grade || 'D')}">${s.rating?.grade || '–'}</span>
-        <div class="day-name"><b>${esc(s.name)}</b><span class="muted">${esc(s.date)} · ${s.minutes ?? '?'} min · ${s.slots.reduce((n, sl) => n + sl.log.filter(x => x.done && !x.sub).length, 0)} sets</span></div>
+        <div class="day-name"><b>${esc(s.name)}</b><span class="muted">${esc(s.date)} · ${s.minutes ?? '?'} min · ${s.slots.reduce((n, sl) => n + sl.log.filter(x => x.done && !x.sub && !x.warm).length, 0)} sets</span></div>
         <button class="icon" data-act="del-session" data-id="${s.id}" aria-label="Delete workout">✕</button>
       </div>`).join('') || '<p class="muted">No workouts yet.</p>'}
   </section>`;
@@ -663,6 +666,19 @@ function viewSettings() {
     <label class="field">Gist ID <input data-field="gist-id" value="${esc(g.id || '')}" placeholder="Created or found automatically"></label>
     ${st.state === 'error' ? `<div class="banner warn">${esc(st.msg)}</div>` : ''}
     <div class="row-btns"><button class="btn sm primary" data-act="sync">Sync now</button><button class="btn sm danger-ghost" data-act="gist-clear">Disconnect</button></div>
+  </section>
+  <section class="card">
+    <div class="card-head"><h2>Dropbox</h2><span class="sync-dot s-${dropbox().refresh ? (st.state === 'error' ? 'error' : 'ok') : 'off'}">${dropbox().refresh ? 'Connected' : 'Off'}</span></div>
+    <p class="muted small">Saves your data to Dropbox → Apps → (your app name) every time it changes, plus one dated backup per day in a <b>backups</b> folder. Exports can be saved there too. Works alongside the Gist or on its own.</p>
+    ${dropbox().refresh ? `<div class="row-btns"><button class="btn sm primary" data-act="sync">Sync now</button><button class="btn sm danger-ghost" data-act="dropbox-clear">Disconnect</button></div>` : `
+    <details class="cue"><summary>One-time setup (about 2 minutes)</summary><ol class="small">
+      <li>On a computer, go to <b>dropbox.com/developers/apps</b> → <b>Create app</b>.</li>
+      <li>Pick <b>Scoped access</b> and <b>App folder</b>. Name it anything unique (e.g. Lift-yourname).</li>
+      <li><b>Permissions</b> tab: tick <b>files.content.write</b> and <b>files.content.read</b>, then Submit.</li>
+      <li><b>Settings</b> tab → OAuth 2 Redirect URIs: add <b>${esc(location.origin + location.pathname)}</b></li>
+      <li>Copy the <b>App key</b> from the Settings tab and paste it below.</li></ol></details>
+    <label class="field">App key <input autocomplete="off" data-field="dropbox-key" value="${esc(dropbox().appKey || '')}" placeholder="From the Dropbox App Console"></label>
+    <button class="btn sm primary" data-act="dropbox-connect">Connect Dropbox</button>`}
   </section>
   <section class="card">
     <div class="card-head"><h2>Data</h2></div>
@@ -727,14 +743,26 @@ function sheetHTML() {
     const x = s.log[sh.j];
     const subs = (() => { let k = sh.j + 1, c = 0; while (s.log[k]?.sub) { k++; c++; } return c; })();
     const cur = E.techOf(x.t);
-    body = `<h2>Set ${mainSets(s.log.slice(0, sh.j + 1)).length} · ${esc(L[s.ex]?.name || '')}</h2>
+    body = `<h2>${x.warm ? 'Warm-up set' : `Set ${workSets(s.log.slice(0, sh.j + 1)).length}`} · ${esc(L[s.ex]?.name || '')}</h2>
       <p class="muted small">Pick a technique for this set. Extra rows (drops, mini-sets, partials) appear after you check the set off, with the right rest timer.</p>
       <ul class="pick tech-pick">
-        <li><button data-act="pick-tech" data-t="" class="${!x.t ? 'on' : ''}"><span class="pick-name"><b>Straight set</b><span class="muted">No technique</span></span></button></li>
+        <li><button data-act="pick-tech" data-t="warm" class="${x.warm ? 'on' : ''}"><span class="pick-name"><b>Warm-up set</b><span class="muted">Not counted toward working sets, ratings, PRs or next-time load suggestions. Rest after it is capped at 60 sec.</span></span></button></li>
+        <li><button data-act="pick-tech" data-t="" class="${!x.t && !x.warm ? 'on' : ''}"><span class="pick-name"><b>Straight set</b><span class="muted">Working set, no technique</span></span></button></li>
         ${Object.entries(E.TECHNIQUES).map(([k, T]) => `<li><button data-act="pick-tech" data-t="${k}" class="${x.t === k ? 'on' : ''}"><span class="pick-name"><b>${esc(T.label)}</b><span class="muted">${esc(T.desc)}</span></span></button></li>`).join('')}
       </ul>
       ${cur?.sub ? `<button class="btn block" data-act="tech-more" data-d="1">+ Add another ${esc(cur.short.toLowerCase())} row</button>` : ''}
       ${subs ? `<button class="btn block danger-ghost" data-act="tech-more" data-d="-1">− Remove a ${esc(cur?.short?.toLowerCase() || 'extra')} row</button>` : ''}`;
+  } else if (sh.type === 'rest') {
+    const s = state.active.slots[sh.i];
+    const ps = programSlotFor(s);
+    const opts = [0, 30, 45, 60, 75, 90, 120, 150, 180, 240];
+    body = `<h2>Rest · ${esc(L[s.ex]?.name || '')}</h2>
+      <p class="muted small">Currently ${s.rest ? `${s.rest} sec` : 'no rest (straight to the next exercise)'}.</p>
+      <div class="chips">${opts.map(v => `<button class="chip-btn ${s.rest === v ? 'on' : ''}" data-act="rest-pick" data-s="${v}">${v ? (v % 60 ? `${Math.floor(v / 60) ? Math.floor(v / 60) + ':' + String(v % 60).padStart(2, '0') : v + 's'}` : v / 60 + ' min') : 'None'}</button>`).join('')}</div>
+      <label class="field mt">Custom (seconds) <input inputmode="numeric" data-field="rest-custom" value="${esc(sh.custom ?? '')}" placeholder="e.g. 100"></label>
+      <button class="btn block" data-act="rest-pick" data-custom="1">Use custom time</button>
+      ${ps ? `<label class="check-item inline mt"><input type="checkbox" data-field="rest-perm" ${sh.perm !== false ? 'checked' : ''}><span>Save to “${esc(state.programs[state.active.programId].days.find(d => d.id === state.active.dayId)?.name || 'this day')}” for future workouts${ps.cycleOnly ? ` (${esc(currentWeek(state.active.programId).label)} only, since this exercise's rest is set per cycle)` : ''}</span></label>`
+        : '<p class="muted small mt">This workout isn\'t from a program day, so the change applies to this workout only.</p>'}`;
   } else if (sh.type === 'import') {
     body = `<h2>Import</h2>
       <p class="muted small">Paste a program from Claude or a full backup file.</p>
@@ -750,7 +778,8 @@ function sheetHTML() {
     body = `<h2>${esc(sh.title)}</h2>
       <textarea class="full mono" rows="12" readonly>${esc(sh.text)}</textarea>
       <button class="btn primary block" data-act="copy-export">Copy to clipboard</button>
-      <button class="btn block" data-act="download-export">Download file</button>`;
+      <button class="btn block" data-act="download-export">Download file</button>
+      ${dropbox().refresh ? '<button class="btn block" data-act="dropbox-export">Save to Dropbox</button>' : ''}`;
   } else if (sh.type === 'finish') {
     const r = sh.rating;
     body = `<h2>Workout complete</h2>
@@ -791,7 +820,7 @@ function startWorkout(slots, meta) {
   state.active = {
     id: uid(), startedAt: Date.now(), date: todayISO(), taken: [], profile: state.settings.activeProfile,
     ...meta,
-    slots: slots.filter(s => L[s.ex] && !s.missing).map(({ byCycle, ...s }) => withSuggestion({ ...s }, week)),
+    slots: slots.map((s, src) => (meta.dayId ? { ...s, src, srcEx: s.subbedFrom || s.ex } : s)).filter(s => L[s.ex] && !s.missing).map(({ byCycle, ...s }) => withSuggestion({ ...s }, week)),
     cycle: week.idx,
   };
   save({ sync: false });
@@ -802,6 +831,30 @@ function startWorkout(slots, meta) {
 }
 
 const mainSets = log => log.filter(x => !x.sub);
+const workSets = log => log.filter(x => !x.sub && !x.warm);
+
+// The program slot an active-workout slot came from, for permanent edits.
+// Returns { target, cycleOnly } where target is the object holding the rest value.
+function programSlotFor(s) {
+  const a = state.active;
+  if (!a?.programId || !a.dayId || s.src == null) return null;
+  const ps = state.programs[a.programId]?.days.find(d => d.id === a.dayId)?.slots?.[s.src];
+  if (!ps) return null;
+  const cyc = E.slotFor(ps, a.cycle ?? 0);
+  if (cyc.ex !== s.srcEx) return null; // the program day was edited since this workout started
+  const o = ps.byCycle?.[a.cycle ?? 0];
+  return o && o.rest != null ? { target: o, cycleOnly: true } : { target: ps, cycleOnly: false };
+}
+function setRest(i, v) {
+  const s = state.active.slots[i];
+  s.rest = Math.max(0, Math.min(900, Math.round(v)));
+  const ps = programSlotFor(s);
+  const perm = ps && ui.sheet?.perm !== false;
+  if (perm) { ps.target.rest = s.rest; ui.preview = null; }
+  save({ sync: !!perm });
+  closeSheet(); render();
+  toast(`Rest set to ${s.rest ? s.rest + ' sec' : 'none'}${perm ? ', saved to the program' : ' for this workout'}.`);
+}
 // Insert the extra rows a technique needs right after working set j (once).
 function addTechRows(s, j, extra = null) {
   const x = s.log[j];
@@ -827,6 +880,7 @@ function restAfter(s, j) {
   const next = s.log[j + 1];
   if (next?.sub) return E.techOf(next.sub)?.rest ?? 0;
   if (x.t === 'superset' || s.rest === 0) return 0;
+  if (x.warm) return Math.min(s.rest, 60);
   return s.rest;
 }
 
@@ -854,17 +908,17 @@ function finishWorkout() {
   const prs = [];
   for (const s of done) {
     if (E.repUnit(L[s.ex]) !== 'reps') continue;
-    const best = Math.max(0, ...s.log.filter(x => x.done && x.w && x.r && !x.sub).map(x => E.e1rm(+x.w, +x.r)));
+    const best = Math.max(0, ...s.log.filter(x => x.done && x.w && x.r && !x.sub && !x.warm).map(x => E.e1rm(+x.w, +x.r)));
     const prev = Math.max(0, ...history(s.ex).flatMap(h => h.sets.map(x => E.e1rm(x.w, x.r))));
     if (best && prev && best > prev) prs.push(`${L[s.ex].name} (e1RM ${Math.round(best)} ${unit()})`);
   }
-  const rating = E.rateSession(a.slots.map(s => ({ ...s, sets: s.log.filter(x => x.done && !x.sub).length })), L, a.focus);
+  const rating = E.rateSession(a.slots.map(s => ({ ...s, sets: s.log.filter(x => x.done && !x.sub && !x.warm).length })), L, a.focus);
   const minutes = Math.round((Date.now() - a.startedAt) / 60000);
   const session = {
     id: a.id, date: a.date, name: a.name, programId: a.programId, dayId: a.dayId, profile: a.profile,
     startedAt: a.startedAt, finishedAt: Date.now(), updatedAt: Date.now(), minutes,
     rating: { overall: rating.overall, grade: rating.grade },
-    slots: a.slots.map(({ suggest, ...s }) => ({ ...s, log: s.log.map(x => ({ w: x.w === '' || x.w == null ? null : +x.w, r: x.r === '' ? null : +x.r, done: x.done, ...(x.t && { t: x.t }), ...(x.sub && { sub: x.sub }) })) })),
+    slots: a.slots.map(({ suggest, src, srcEx, ...s }) => ({ ...s, log: s.log.map(x => ({ w: x.w === '' || x.w == null ? null : +x.w, r: x.r === '' ? null : +x.r, done: x.done, ...(x.t && { t: x.t }), ...(x.sub && { sub: x.sub }), ...(x.warm && { warm: true }) })) })),
   };
   state.sessions.push(session);
   if (a.programId && a.dayId && state.programs[a.programId]) {
@@ -879,7 +933,7 @@ function finishWorkout() {
   keepAwake(false);
   render({ keepScroll: false });
   window.scrollTo(0, 0);
-  openSheet({ type: 'finish', rating, minutes, sets: done.reduce((n, s) => n + s.log.filter(x => x.done && !x.sub).length, 0), prs });
+  openSheet({ type: 'finish', rating, minutes, sets: done.reduce((n, s) => n + s.log.filter(x => x.done && !x.sub && !x.warm).length, 0), prs });
 }
 
 function applySwap(where, i, newId, takenMark) {
@@ -1110,10 +1164,17 @@ const actions = {
     const x = s.log[+el.dataset.j];
     const j = +el.dataset.j;
     if (!x.done) {
-      const prevW = s.log.slice(0, j).reverse().find(p => p.w !== '' && p.w != null)?.w;
-      if (x.w === '' || x.w == null) x.w = prevW ?? s.suggest?.weight ?? '';
-      const subReps = x.sub ? E.techOf(x.sub)?.reps : null;
-      if (x.r === '' && (x.sub ? subReps : s.suggest?.reps)) x.r = x.sub ? subReps : s.suggest.reps;
+      if (x.warm) {
+        const wu = E.warmups(lib()[s.ex], +(s.log.find(y => !y.warm && !y.sub && y.w !== '' && y.w != null)?.w || s.suggest?.weight));
+        const k = s.log.slice(0, j).filter(y => y.warm).length;
+        if ((x.w === '' || x.w == null) && wu[k]) x.w = wu[k].w;
+        if (x.r === '' && wu[k]) x.r = wu[k].r;
+      } else {
+        const prevW = s.log.slice(0, j).reverse().find(p => !p.warm && p.w !== '' && p.w != null)?.w;
+        if (x.w === '' || x.w == null) x.w = prevW ?? s.suggest?.weight ?? '';
+        const subReps = x.sub ? E.techOf(x.sub)?.reps : null;
+        if (x.r === '' && (x.sub ? subReps : s.suggest?.reps)) x.r = x.sub ? subReps : s.suggest.reps;
+      }
       x.done = true;
       if (!x.sub && E.techOf(x.t)?.sub) addTechRows(s, j);
       const isLast = j === s.log.length - 1 && +el.dataset.i === state.active.slots.length - 1;
@@ -1135,8 +1196,9 @@ const actions = {
     let k = j + 1; while (s.log[k]?.sub) k++;
     const extra = s.log.slice(j + 1, k);
     if (extra.every(r => !r.done)) s.log.splice(j + 1, extra.length);
-    x.t = el.dataset.t || undefined; delete x.pct;
-    if (!x.t) delete x.t;
+    delete x.pct;
+    if (el.dataset.t === 'warm') { x.warm = true; delete x.t; }
+    else { delete x.warm; x.t = el.dataset.t || undefined; if (!x.t) delete x.t; }
     if (x.done && E.techOf(x.t)?.sub) addTechRows(s, j);
     save({ sync: false }); closeSheet(); render();
   },
@@ -1147,8 +1209,20 @@ const actions = {
     else { let k = j + 1; while (s.log[k]?.sub) k++; if (k > j + 1) s.log.splice(k - 1, 1); }
     save({ sync: false }); renderSheet(); render();
   },
-  'add-set': el => { const s = state.active.slots[+el.dataset.i]; const last = mainSets(s.log).pop(); s.log.push({ w: last?.w ?? '', r: '', done: false }); save({ sync: false }); render(); },
-  'del-set': el => { const s = state.active.slots[+el.dataset.i]; if (s.log.length > 1) { if (s.log[s.log.length - 1].sub) s.log.pop(); else if (mainSets(s.log).length > 1) s.log.pop(); } save({ sync: false }); render(); },
+  'add-warm': el => {
+    const s = state.active.slots[+el.dataset.i];
+    let at = 0; while (s.log[at]?.warm) at++;
+    s.log.splice(at, 0, { w: '', r: '', done: false, warm: true });
+    save({ sync: false }); render();
+  },
+  'rest-edit': el => { const s = state.active.slots[+el.dataset.i]; openSheet({ type: 'rest', i: +el.dataset.i, perm: true, custom: s.rest }); },
+  'rest-pick': el => {
+    const v = el.dataset.custom ? parseInt(ui.sheet.custom, 10) : +el.dataset.s;
+    if (isNaN(v)) return toast('Enter a number of seconds.');
+    setRest(ui.sheet.i, v);
+  },
+  'add-set': el => { const s = state.active.slots[+el.dataset.i]; const last = workSets(s.log).pop(); s.log.push({ w: last?.w ?? '', r: '', done: false }); save({ sync: false }); render(); },
+  'del-set': el => { const s = state.active.slots[+el.dataset.i]; if (s.log.length > 1) { if (s.log[s.log.length - 1].sub) s.log.pop(); else if (workSets(s.log).length > 1 || s.log[s.log.length - 1].warm) s.log.pop(); } save({ sync: false }); render(); },
   'toggle-rating': () => { ui.showRating = !ui.showRating; render(); },
   finish: () => finishWorkout(),
   discard: () => { if (confirm('Discard this workout? Logged sets will be lost.')) { state.active = null; save({ sync: false }); keepAwake(false); render(); } },
@@ -1204,6 +1278,9 @@ const actions = {
   },
   'copy-export': async () => { try { await navigator.clipboard.writeText(ui.sheet.text); toast('Copied.'); } catch { toast('Copy failed. Select the text and copy it manually.'); } },
   'download-export': () => download(ui.sheet.file, ui.sheet.text),
+  'dropbox-export': async () => { try { await saveToDropbox('/exports/' + ui.sheet.file, ui.sheet.text); toast('Saved to Dropbox.'); } catch (e) { toast(e.message); } },
+  'dropbox-connect': async () => { try { await connectDropbox(); } catch (e) { toast(e.message); } },
+  'dropbox-clear': () => { if (confirm('Disconnect Dropbox on this device? Files already in Dropbox stay there.')) { clearDropbox(); render(); } },
   // progress
   pt: el => { $('#chart-tip').textContent = el.dataset.label; },
   'del-session': el => { if (confirm('Delete this workout from history?')) { state.sessions = state.sessions.filter(s => s.id !== el.dataset.id); state.deleted.push(el.dataset.id); save(); render(); } },
@@ -1238,9 +1315,9 @@ document.addEventListener('input', e => {
     const log = state.active.slots[i].log, j = +el.dataset.j;
     const old = log[j][f];
     log[j][f] = el.value;
-    if (f === 'w') log.forEach((x, k) => {
+    if (f === 'w' && !log[j].warm) log.forEach((x, k) => {
       // Carry the new weight down to later, unfinished sets that matched the old value.
-      if (k > j && !x.done && (x.w === '' || x.w == null || String(x.w) === String(old))) {
+      if (k > j && !x.done && !x.warm && (x.w === '' || x.w == null || String(x.w) === String(old))) {
         x.w = el.value;
         const inp = document.querySelector(`[data-field="w"][data-i="${i}"][data-j="${k}"]`);
         if (inp) inp.value = el.value;
@@ -1257,6 +1334,8 @@ document.addEventListener('input', e => {
   else if (f === 'gist-id') setGist({ id: el.value.trim() });
   else if (f === 'sheet-q') { ui.sheet.q = el.value; const pos = el.selectionStart; renderSheet(); const n = document.querySelector('[data-field="sheet-q"]'); n.focus(); n.setSelectionRange(pos, pos); }
   else if (f === 'import-text') ui.sheet.text = el.value;
+  else if (f === 'rest-custom') ui.sheet.custom = el.value;
+  else if (f === 'dropbox-key') setDropbox({ appKey: el.value.trim() });
 });
 
 document.addEventListener('change', e => {
@@ -1273,6 +1352,7 @@ document.addEventListener('change', e => {
   else if (f === 'progress-ex') { ui.progressEx = el.value; render(); }
   else if (f === 'sheet-all') { ui.sheet.all = el.checked; renderSheet(); }
   else if (f === 'import-target') { ui.sheet.target = el.value; }
+  else if (f === 'rest-perm') { ui.sheet.perm = el.checked; }
   else if (f === 'intensity') {
     const s = editTarget(el.dataset.where, +el.dataset.i, 'intensity');
     if (el.value) s.intensity = { t: el.value, on: ALL_SETS_TECH.has(el.value) ? 'all' : 'last' };
@@ -1288,5 +1368,6 @@ onSync(() => { if (ui.view === 'settings') render(); });
 migrateCalendar();
 render({ keepScroll: false });
 if (state.active) keepAwake(true);
-if (gist().token) syncNow().then(() => { migrateCalendar(); ui.preview = null; render(); }).catch(() => {});
+finishDropboxLogin().then(ok => { if (ok) { ui.view = 'settings'; toast('Dropbox connected.'); return syncNow().then(() => render()); } }).catch(e => toast(e.message));
+if (gist().token || dropbox().refresh) syncNow().then(() => { migrateCalendar(); ui.preview = null; render(); }).catch(() => {});
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js').catch(() => {});

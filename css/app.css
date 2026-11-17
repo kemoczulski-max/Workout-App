@@ -287,3 +287,6 @@ textarea.full { resize: vertical; font-size: 14px; }
 .tech-pick button.on { background: var(--accent-dim); border-radius: 10px; }
 .slot-meta select { max-width: 170px; }
 .sheet-x { position: sticky; top: 0; float: right; z-index: 2; margin: -4px -4px 0 8px; background: var(--surface-2); }
+.rest-btn { background: none; border: 0; padding: 0; color: var(--accent); font: inherit; text-decoration: underline dotted; text-underline-offset: 3px; }
+.set-n.tap.warm { border-style: solid; border-color: var(--line); color: var(--muted); font-size: 12px; }
+.set-row.warm-row input { height: 38px; font-size: 15px; opacity: .8; }

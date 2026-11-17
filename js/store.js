@@ -46,10 +46,15 @@ let pushTimer = null;
 export function save({ sync = true } = {}) {
   state.updatedAt = Date.now();
   try { localStorage.setItem(KEY, JSON.stringify(state)); } catch (e) { console.warn('save failed', e); }
-  if (sync && gist().token) {
+  if (sync && (gist().token || dropbox().refresh)) {
     clearTimeout(pushTimer);
-    pushTimer = setTimeout(() => pushGist().catch(err => setSyncStatus('error', err.message)), 2500);
+    pushTimer = setTimeout(() => pushAll().catch(err => setSyncStatus('error', err.message)), 2500);
   }
+}
+
+async function pushAll() {
+  if (gist().token) await pushGist();
+  if (dropbox().refresh) await pushDropbox();
 }
 
 export function replaceState(next) {
@@ -159,5 +164,93 @@ function merge(remote) {
 }
 
 export async function syncNow() {
-  try { await pullGist(); } catch (e) { setSyncStatus('error', e.message); throw e; }
+  try {
+    if (gist().token) await pullGist();
+    if (dropbox().refresh) await pullDropbox();
+  } catch (e) { setSyncStatus('error', e.message); throw e; }
+}
+
+// ---------- Dropbox sync ----------
+// Uses your own Dropbox app (App folder access) with OAuth PKCE, so no secret is needed and
+// nothing passes through a server. Files land in Dropbox/Apps/<your app name>/.
+const DBX_KEY = 'liftapp.dropbox'; // app key + tokens stay on this device, never uploaded
+const DBX_FILE = '/workout-app-data.json';
+export function dropbox() {
+  try { return JSON.parse(localStorage.getItem(DBX_KEY)) || {}; } catch { return {}; }
+}
+export function setDropbox(d) { localStorage.setItem(DBX_KEY, JSON.stringify({ ...dropbox(), ...d })); }
+export function clearDropbox() { const { appKey } = dropbox(); localStorage.setItem(DBX_KEY, JSON.stringify({ appKey })); }
+const redirectUri = () => location.origin + location.pathname;
+const b64url = buf => btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+
+export async function connectDropbox() {
+  const { appKey } = dropbox();
+  if (!appKey) throw new Error('Paste your Dropbox app key first.');
+  const verifier = b64url(crypto.getRandomValues(new Uint8Array(48)));
+  const challenge = b64url(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier)));
+  setDropbox({ verifier });
+  const q = new URLSearchParams({ client_id: appKey, response_type: 'code', code_challenge: challenge, code_challenge_method: 'S256', token_access_type: 'offline', redirect_uri: redirectUri() });
+  location.href = 'https://www.dropbox.com/oauth2/authorize?' + q;
+}
+
+async function dbxToken(params) {
+  const res = await fetch('https://api.dropboxapi.com/oauth2/token', { method: 'POST', body: new URLSearchParams({ client_id: dropbox().appKey, ...params }) });
+  const j = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(`Dropbox sign-in failed: ${j.error_description || j.error || res.status}`);
+  return j;
+}
+
+// Called on boot: finishes the sign-in when Dropbox redirects back with ?code=.
+export async function finishDropboxLogin() {
+  const code = new URLSearchParams(location.search).get('code');
+  if (!code) return false;
+  history.replaceState(null, '', redirectUri());
+  const { verifier } = dropbox();
+  if (!verifier) return false;
+  const j = await dbxToken({ grant_type: 'authorization_code', code, code_verifier: verifier, redirect_uri: redirectUri() });
+  setDropbox({ refresh: j.refresh_token, access: j.access_token, exp: Date.now() + (j.expires_in - 60) * 1000, verifier: null });
+  return true;
+}
+
+async function dbxAccess() {
+  const d = dropbox();
+  if (d.access && d.exp > Date.now()) return d.access;
+  const j = await dbxToken({ grant_type: 'refresh_token', refresh_token: d.refresh });
+  setDropbox({ access: j.access_token, exp: Date.now() + (j.expires_in - 60) * 1000 });
+  return j.access_token;
+}
+
+async function dbxContent(endpoint, arg, body) {
+  const res = await fetch('https://content.dropboxapi.com/2/files/' + endpoint, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${await dbxAccess()}`, 'Dropbox-API-Arg': JSON.stringify(arg), ...(body != null && { 'Content-Type': 'application/octet-stream' }) },
+    body,
+  });
+  if (res.status === 409 && endpoint === 'download') return null; // file not there yet
+  if (!res.ok) throw new Error(`Dropbox ${res.status}: ${(await res.text()).slice(0, 120)}`);
+  return res;
+}
+
+// Save any file to the app folder, e.g. an exported program.
+export async function saveToDropbox(path, text) {
+  await dbxContent('upload', { path: path.startsWith('/') ? path : '/' + path, mode: 'overwrite', mute: true }, text);
+}
+
+export async function pushDropbox() {
+  if (!dropbox().refresh) return;
+  setSyncStatus('syncing');
+  const data = payload();
+  await saveToDropbox(DBX_FILE, data);
+  // One dated copy per day, so a bad change can be rolled back.
+  await saveToDropbox(`/backups/workout-backup-${todayISO()}.json`, data);
+  setSyncStatus('ok', 'Saved to Dropbox');
+}
+
+export async function pullDropbox() {
+  if (!dropbox().refresh) return false;
+  setSyncStatus('syncing');
+  const res = await dbxContent('download', { path: DBX_FILE });
+  if (res) { merge(JSON.parse(await res.text())); save({ sync: false }); }
+  await pushDropbox();
+  return true;
 }

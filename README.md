@@ -8,6 +8,8 @@ A workout app for iPhone that you add to your Home Screen. It runs entirely in t
 - **Substitution:** exercises that need equipment you don't have are swapped automatically for the closest match by muscle and movement pattern. Tap **Taken** when a machine is busy to swap it on the spot.
 - **Build:** pick a focus or specific muscles plus a time cap, and the app generates a workout from your equipment.
 - **Intensity techniques:** tap a set number during a workout to make it a drop set, mechanical drop, myo-reps, rest-pause, cluster, lengthened partials, failure, slow eccentric, stretch pause or 1½ reps. Techniques that add mini-sets insert the rows for you with the right short rest. Mini-sets are kept out of progression and set counts.
+- **Rest times:** tap the rest time on any exercise during a workout to change it. By default the change is saved to that program day for future workouts.
+- **Warm-up sets:** tap a set number → *Warm-up set*, or tap **+ Warm-up**. Warm-ups are shown as W and are left out of set counts, ratings, PRs and load suggestions.
 - **Logging:** log weight and reps for each set. The app suggests your next load with double progression, calculates warm-up sets, and runs a rest timer. The screen stays awake during a workout.
 - **Training blocks:** 5 weeks: RIR 3 → 2 → 1 → 0–1, then a deload.
 - **Progress:** estimated 1RM trend for each lift, workout history, and PR detection.
@@ -16,6 +18,9 @@ A workout app for iPhone that you add to your Home Screen. It runs entirely in t
 1. GitHub repo → **Settings → Pages** → Source: *Deploy from a branch*, Branch: `main` / `(root)` → Save.
 2. On your iPhone, open `https://kemoczulski-max.github.io/workout-app/` in Safari → Share → **Add to Home Screen**.
 3. (Optional) To sync, go to github.com → Settings → Developer settings → Personal access tokens → **Tokens (classic)** → generate a token with only the `gist` scope. Paste it in the app under **Setup → Sync**.
+
+## Dropbox (optional)
+Setup → Dropbox has the steps: create a Dropbox app with *App folder* access, add the app's URL as a redirect URI, paste the App key and tap Connect. Data saves to `Dropbox/Apps/<app name>/workout-app-data.json` on every change, with one dated copy per day in `backups/`. Exports can be saved to `exports/`.
 
 ## Importing a program (e.g. from a PDF)
 Upload the PDF to Claude and ask: *"Convert this into a Lift app program import."* Paste the result into **Program → Import**.
