@@ -1,5 +1,5 @@
 // Offline support: cache the app shell, serve it network-first so updates land on next open.
-const CACHE = 'lift-v7';
+const CACHE = 'lift-v8';
 const SHELL = [
   './', './index.html', './css/app.css', './manifest.webmanifest',
   './js/app.js', './js/engine.js', './js/exercises.js', './js/programs.js', './js/store.js',
@@ -26,4 +26,22 @@ self.addEventListener('fetch', e => {
       })
       .catch(() => caches.match(e.request, { ignoreSearch: true }))
   );
+});
+
+// Rest-timer notification sent by the push server while the app is in the background.
+self.addEventListener('push', e => {
+  let data = {};
+  try { data = e.data ? e.data.json() : {}; } catch {}
+  e.waitUntil(self.registration.showNotification(data.title || 'Rest over', {
+    body: data.body || 'Time for your next set.',
+    tag: 'rest', renotify: true, icon: './icons/icon-192.png', badge: './icons/icon-192.png',
+  }));
+});
+
+self.addEventListener('notificationclick', e => {
+  e.notification.close();
+  e.waitUntil(self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(list => {
+    const c = list[0];
+    return c ? c.focus() : self.clients.openWindow('./');
+  }));
 });

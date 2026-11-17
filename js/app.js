@@ -214,6 +214,47 @@ function tickTimer() {
   timerInt = setInterval(draw, 250);
 }
 
+// ---------- lock-screen rest notifications (via the Cloudflare push server) ----------
+const PUSH_KEY = 'liftapp.push'; // server URL + this phone's subscription, never uploaded
+const pushCfg = () => { try { return JSON.parse(localStorage.getItem(PUSH_KEY)) || {}; } catch { return {}; } };
+const setPush = v => localStorage.setItem(PUSH_KEY, JSON.stringify({ ...pushCfg(), ...v }));
+const pushUrl = () => (pushCfg().url || '').replace(/\/+$/, '');
+const fromB64url = s => Uint8Array.from(atob(s.replace(/-/g, '+').replace(/_/g, '/') + '==='.slice((s.length + 3) % 4)), c => c.charCodeAt(0));
+
+async function enablePush() {
+  if (!pushUrl()) throw new Error('Paste the push server address first.');
+  if (!('serviceWorker' in navigator) || !('PushManager' in window)) throw new Error('Notifications only work from the Home Screen app (iOS 16.4 or later). Open Lift from its Home Screen icon.');
+  const perm = await Notification.requestPermission();
+  if (perm !== 'granted') throw new Error('Notifications are turned off for Lift. Turn them on in iPhone Settings → Notifications → Lift.');
+  const res = await fetch(pushUrl() + '/key');
+  if (!res.ok) throw new Error(`Push server error ${res.status}. Check the address.`);
+  const { key } = await res.json();
+  const reg = await navigator.serviceWorker.ready;
+  const old = await reg.pushManager.getSubscription();
+  if (old) await old.unsubscribe();
+  const sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: fromB64url(key) });
+  setPush({ sub: sub.toJSON(), on: true });
+}
+function pushPost(path, body) {
+  return fetch(pushUrl() + path, { method: 'POST', keepalive: true, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+}
+// Hand the rest timer to the server when the app goes to the background; take it back on return.
+function pushOnHide() {
+  const c = pushCfg();
+  const end = state.active?.timerEnd;
+  if (!c.on || !c.sub || !end || end - Date.now() < 3000) return;
+  pushPost('/schedule', { sub: c.sub, at: end }).catch(() => {});
+  c.pending = true; setPush({ pending: true });
+}
+function pushOnShow() {
+  const c = pushCfg();
+  if (!c.on || !c.sub || !c.pending) return;
+  setPush({ pending: false });
+  pushPost('/cancel', { endpoint: c.sub.endpoint }).catch(() => {});
+}
+document.addEventListener('visibilitychange', () => (document.visibilityState === 'hidden' ? pushOnHide() : pushOnShow()));
+window.addEventListener('pagehide', pushOnHide);
+
 async function keepAwake(on) {
   try {
     if (on && 'wakeLock' in navigator && !wakeLock) {
@@ -702,6 +743,15 @@ function viewSettings() {
     <label class="field">Gist ID <input data-field="gist-id" value="${esc(g.id || '')}" placeholder="Created or found automatically"></label>
     ${st.state === 'error' ? `<div class="banner warn">${esc(st.msg)}</div>` : ''}
     <div class="row-btns"><button class="btn sm primary" data-act="sync">Sync now</button><button class="btn sm danger-ghost" data-act="gist-clear">Disconnect</button></div>
+  </section>
+  <section class="card">
+    <div class="card-head"><h2>Rest notifications</h2><span class="sync-dot s-${pushCfg().on ? 'ok' : 'off'}">${pushCfg().on ? 'On' : 'Off'}</span></div>
+    <p class="muted small">Sends a lock-screen notification when your rest is over while Lift is in the background or the phone is locked. Needs the push server from the README and the Home Screen app.</p>
+    <label class="field">Push server address <input autocomplete="off" inputmode="url" data-field="push-url" value="${esc(pushCfg().url || '')}" placeholder="https://lift-push.yourname.workers.dev"></label>
+    <div class="row-btns">
+      <button class="btn sm primary" data-act="push-enable">${pushCfg().on ? 'Re-enable' : 'Enable notifications'}</button>
+      ${pushCfg().on ? '<button class="btn sm" data-act="push-test">Send a test in 10 sec</button><button class="btn sm danger-ghost" data-act="push-off">Turn off</button>' : ''}
+    </div>
   </section>
   <section class="card">
     <div class="card-head"><h2>Dropbox</h2><span class="sync-dot s-${dropbox().refresh ? (st.state === 'error' ? 'error' : 'ok') : 'off'}">${dropbox().refresh ? 'Connected' : 'Off'}</span></div>
@@ -1326,6 +1376,16 @@ const actions = {
     try { const url = await connectDropbox(); if (w) w.location.href = url; else location.href = url; }
     catch (e) { w?.close(); toast(e.message); }
   },
+  'push-enable': async () => { try { await enablePush(); render(); toast('Notifications on.'); } catch (e) { toast(e.message); } },
+  'push-test': async () => {
+    const c = pushCfg();
+    try {
+      const r = await pushPost('/schedule', { sub: c.sub, at: Date.now() + 10000 });
+      if (!r.ok) throw new Error(`Push server error ${r.status}`);
+      toast('Lock your phone now. The test arrives in 10 sec.');
+    } catch (e) { toast(e.message); }
+  },
+  'push-off': async () => { try { (await (await navigator.serviceWorker.ready).pushManager.getSubscription())?.unsubscribe(); } catch {} setPush({ on: false, sub: null }); render(); },
   'dropbox-finish': async () => {
     const code = document.querySelector('[data-field="dropbox-code"]')?.value || '';
     if (!code.trim()) return toast('Paste the code from Dropbox first.');
@@ -1388,6 +1448,7 @@ document.addEventListener('input', e => {
   else if (f === 'import-text') ui.sheet.text = el.value;
   else if (f === 'rest-custom') ui.sheet.custom = el.value;
   else if (f === 'dropbox-key') setDropbox({ appKey: el.value.trim() });
+  else if (f === 'push-url') setPush({ url: el.value.trim() });
 });
 
 document.addEventListener('change', e => {

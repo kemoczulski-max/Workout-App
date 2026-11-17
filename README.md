@@ -22,6 +22,17 @@ A workout app for iPhone that you add to your Home Screen. It runs entirely in t
 ## Dropbox (optional)
 Setup → Dropbox has the steps: create a Dropbox app with *App folder* access, paste the App key, tap *Get code from Dropbox*, then paste the code Dropbox shows back into the app. Data saves to `Dropbox/Apps/<app name>/workout-app-data.json` on every change, with one dated copy per day in `backups/`. Exports can be saved to `exports/`.
 
+## Rest notifications on the lock screen (optional)
+A small Cloudflare Worker in `push-worker/` sends a notification when your rest ends while Lift is in the background. It deploys from GitHub Actions, so setup works from a phone:
+1. Sign up free at **dash.cloudflare.com**. Open **Workers & Pages** once and accept the `workers.dev` subdomain it offers.
+2. Copy your **Account ID** (Workers & Pages overview, right side).
+3. Profile icon → **My Profile → API Tokens → Create Token** → template **Edit Cloudflare Workers** → Continue → Create. Copy the token.
+4. In this GitHub repo: **Settings → Secrets and variables → Actions → New repository secret**. Add `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`.
+5. **Actions** tab → **Deploy push server** → **Run workflow**. When it finishes, the log shows the address, e.g. `https://lift-push.yourname.workers.dev`.
+6. In Lift (opened from the Home Screen icon): **Setup → Rest notifications**, paste the address, tap **Enable notifications** and allow. Tap **Send a test in 10 sec** and lock the phone.
+
+The Worker uses the free plan (Durable Objects with alarms). It keeps no workout data, only this phone's push address while a rest timer is running.
+
 ## Importing a program (e.g. from a PDF)
 Upload the PDF to Claude and ask: *"Convert this into a Lift app program import."* Paste the result into **Program → Import**.
 
