@@ -1,5 +1,6 @@
 import { MUSCLES, EQUIPMENT, PATTERNS } from './exercises.js';
 import * as E from './engine.js';
+import { DEFAULT_PROGRAM } from './programs.js';
 import { state, save, uid, todayISO, gist, setGist, syncNow, onSync, syncStatus, replaceState, resetAll, dropbox, setDropbox, clearDropbox, connectDropbox, finishDropboxCode, saveToDropbox } from './store.js';
 
 // ================= helpers =================
@@ -1490,9 +1491,21 @@ document.addEventListener('change', e => {
 
 onSync(() => { if (ui.view === 'settings') render(); });
 
+// Upgrade the stored copy of the built-in program when its revision changes. Keeps the
+// current day, cycle and history (updateProgram matches days by name).
+function upgradeDefaultProgram() {
+  const p = state.programs[DEFAULT_PROGRAM.id];
+  if (!p || (p.rev || 1) >= DEFAULT_PROGRAM.rev) return;
+  updateProgram(p, { name: p.name, days: structuredClone(DEFAULT_PROGRAM.days), cycles: p.cycles });
+  p.rev = DEFAULT_PROGRAM.rev;
+  save();
+  setTimeout(() => toast('Program updated: more volume on every day.'), 600);
+}
+
 // ================= boot =================
+upgradeDefaultProgram();
 migrateCalendar();
 render({ keepScroll: false });
 if (state.active) keepAwake(true);
-if (gist().token || dropbox().refresh) syncNow().then(() => { migrateCalendar(); ui.preview = null; render(); }).catch(() => {});
+if (gist().token || dropbox().refresh) syncNow().then(() => { upgradeDefaultProgram(); migrateCalendar(); ui.preview = null; render(); }).catch(() => {});
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js').catch(() => {});

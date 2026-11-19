@@ -1,5 +1,5 @@
 // Offline support: cache the app shell, serve it network-first so updates land on next open.
-const CACHE = 'lift-v10';
+const CACHE = 'lift-v11';
 const SHELL = [
   './', './index.html', './css/app.css', './manifest.webmanifest',
   './js/app.js', './js/engine.js', './js/exercises.js', './js/programs.js', './js/store.js',
