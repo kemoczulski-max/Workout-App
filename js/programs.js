@@ -5,6 +5,12 @@
 
 const s = (ex, sets, lo, hi, rest, group) => ({ ex, sets, reps: [lo, hi], rest, ...(group && { group }) });
 
+// Intensity techniques that switch on later in the 5-week block (week index 0-4; week 5 is the deload).
+// w3 / w4: technique key for week 3 / week 4, on the last set unless it is an all-sets technique.
+const ALL_SETS = new Set(['pause', 'eccentric', 'onehalf']);
+const it = t => (t ? { t, on: ALL_SETS.has(t) ? 'all' : 'last' } : null);
+const later = (slot, w3, w4) => ({ ...slot, byCycle: [null, null, w3 ? { intensity: it(w3) } : null, w4 ? { intensity: it(w4) } : null, null] });
+
 // Ab circuit: 3 exercises back to back, 2 rounds, 90 sec between rounds.
 const absA = [s('cable_crunch', 2, 10, 15, 0, 'Abs 1'), s('hanging_leg_raise', 2, 10, 15, 0, 'Abs 2'), s('pallof_press', 2, 10, 12, 90, 'Abs 3')];
 const absB = [s('decline_crunch', 2, 10, 15, 0, 'Abs 1'), s('ab_wheel', 2, 8, 12, 0, 'Abs 2'), s('pallof_press', 2, 10, 12, 90, 'Abs 3')];
@@ -12,15 +18,15 @@ const absB = [s('decline_crunch', 2, 10, 15, 0, 'Abs 1'), s('ab_wheel', 2, 8, 12
 export const DEFAULT_PROGRAM = {
   id: 'ppl6',
   name: 'PPL x2 — Hypertrophy',
-  rev: 3,
+  rev: 4,
   days: [
     {
       id: 'push_a', name: 'Push A (Chest)', focus: 'push', slots: [
         s('db_incline', 3, 6, 10, 180),
-        s('machine_chest_press', 3, 8, 12, 150),
-        s('cable_fly', 3, 10, 15, 90),
+        later(s('machine_chest_press', 3, 8, 12, 150), null, 'rp'),
+        later(s('cable_fly', 3, 10, 15, 90), 'partials', 'drop'),
         s('dip', 2, 8, 12, 120),
-        s('cable_lateral', 4, 12, 15, 0, 'A1'),
+        later(s('cable_lateral', 4, 12, 15, 0, 'A1'), 'myo', 'myo'),
         s('cable_oh_ext', 3, 10, 15, 90, 'A2'),
         s('rope_pushdown', 3, 12, 15, 0, 'B1'),
         s('cable_rear_fly', 3, 12, 20, 60, 'B2'),
@@ -29,12 +35,12 @@ export const DEFAULT_PROGRAM = {
     },
     {
       id: 'pull_a', name: 'Pull A (Width)', focus: 'pull', slots: [
-        s('lat_pulldown', 3, 8, 12, 120),
+        later(s('lat_pulldown', 3, 8, 12, 120), null, 'drop'),
         s('chest_sup_row', 3, 8, 12, 120),
         s('db_row', 3, 8, 12, 90),
-        s('cable_pullover', 3, 12, 15, 75),
-        s('incline_db_curl', 3, 10, 12, 0, 'A1'),
-        s('reverse_pec_deck', 3, 12, 20, 75, 'A2'),
+        later(s('cable_pullover', 3, 12, 15, 75), 'partials', null),
+        later(s('incline_db_curl', 3, 10, 12, 0, 'A1'), 'partials', 'partials'),
+        later(s('reverse_pec_deck', 3, 12, 20, 75, 'A2'), null, 'myo'),
         s('hammer_curl', 3, 10, 12, 0, 'B1'),
         s('cable_shrug', 3, 12, 15, 60, 'B2'),
         ...absB,
@@ -45,22 +51,22 @@ export const DEFAULT_PROGRAM = {
         s('hack_squat', 3, 6, 10, 180),
         s('rdl', 3, 8, 10, 150),
         s('hip_thrust', 3, 8, 12, 120),
-        s('leg_ext', 3, 10, 15, 0, 'A1'),
-        s('seated_curl', 3, 10, 15, 75, 'A2'),
+        later(s('leg_ext', 3, 10, 15, 0, 'A1'), null, 'drop'),
+        later(s('seated_curl', 3, 10, 15, 75, 'A2'), 'partials', 'partials'),
         s('adductor_machine', 2, 12, 15, 0, 'B1'),
         s('abductor_machine', 2, 12, 20, 60, 'B2'),
-        s('standing_calf', 4, 10, 15, 60),
+        later(s('standing_calf', 4, 10, 15, 60), 'pause', 'pause'),
       ],
     },
     {
       id: 'push_b', name: 'Push B (Shoulders)', focus: 'push', slots: [
-        s('machine_ohp', 3, 8, 12, 120),
+        later(s('machine_ohp', 3, 8, 12, 120), null, 'rp'),
         s('bb_bench', 3, 5, 8, 180),
         s('machine_incline', 3, 8, 12, 120),
-        s('low_high_fly', 3, 12, 15, 75),
-        s('machine_lateral', 4, 12, 20, 0, 'A1'),
+        later(s('low_high_fly', 3, 12, 15, 75), 'partials', null),
+        later(s('machine_lateral', 4, 12, 20, 0, 'A1'), 'myo', 'drop'),
         s('ez_skull', 3, 10, 12, 75, 'A2'),
-        s('bar_pushdown', 2, 12, 15, 0, 'B1'),
+        later(s('bar_pushdown', 2, 12, 15, 0, 'B1'), null, 'drop'),
         s('face_pull', 2, 15, 20, 60, 'B2'),
         ...absA,
       ],
@@ -69,10 +75,10 @@ export const DEFAULT_PROGRAM = {
       id: 'pull_b', name: 'Pull B (Thickness)', focus: 'pull', slots: [
         s('pullup', 3, 6, 10, 150),
         s('cable_row', 3, 10, 12, 120),
-        s('single_arm_pulldown', 2, 12, 15, 75),
+        later(s('single_arm_pulldown', 2, 12, 15, 75), null, 'partials'),
         s('preacher_curl', 2, 10, 12, 75),
-        s('bayesian_curl', 3, 10, 15, 0, 'A1'),
-        s('face_pull', 3, 15, 20, 60, 'A2'),
+        later(s('bayesian_curl', 3, 10, 15, 0, 'A1'), 'partials', 'drop'),
+        later(s('face_pull', 3, 15, 20, 60, 'A2'), 'myo', 'myo'),
         s('rope_hammer', 3, 10, 15, 0, 'B1'),
         s('db_shrug', 3, 10, 15, 60, 'B2'),
         ...absB,
@@ -80,14 +86,14 @@ export const DEFAULT_PROGRAM = {
     },
     {
       id: 'legs_b', name: 'Legs B (Posterior)', focus: 'legs', slots: [
-        s('lying_curl', 3, 10, 15, 90),
+        later(s('lying_curl', 3, 10, 15, 90), 'partials', 'drop'),
         s('bulgarian', 3, 8, 12, 120),
-        s('leg_press', 3, 10, 15, 150),
+        later(s('leg_press', 3, 10, 15, 150), null, 'rp'),
         s('back_ext', 3, 10, 15, 75),
         s('cable_pull_through', 2, 12, 15, 75),
         s('leg_ext', 2, 12, 15, 0, 'A1'),
         s('seated_curl', 2, 10, 15, 60, 'A2'),
-        s('leg_press_calf', 4, 12, 20, 60),
+        later(s('leg_press_calf', 4, 12, 20, 60), 'pause', 'myo'),
         ...absA,
       ],
     },
