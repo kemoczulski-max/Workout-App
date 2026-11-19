@@ -275,6 +275,8 @@ export function slotFor(slot, idx) {
 
 // Label for the rep column: "reps" unless the exercise is logged in seconds, passes, etc.
 export const repUnit = ex => ex?.unit || 'reps';
+// What the reps column shows: per side for single-arm and single-leg work.
+export const repLabel = ex => (ex?.unit ? ex.unit : ex?.perSide ? 'reps/side' : 'reps');
 export const fmtRange = ([lo, hi]) => (lo === hi ? `${lo}` : `${lo}–${hi}`);
 
 export const roundTo = (w, step) => (step ? Math.round(w / step) * step : w);

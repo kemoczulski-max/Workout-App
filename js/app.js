@@ -337,7 +337,7 @@ function slotList(slots, where, { editable = true } = {}) {
     if (!ex) return `<li class="slot missing"><div class="slot-main"><b>Unknown exercise: ${esc(s.ex)}</b></div>
       <div class="slot-actions"><button class="btn sm" data-act="swap" data-where="${where}" data-i="${i}">Choose</button><button class="btn sm ghost" data-act="remove-slot" data-where="${where}" data-i="${i}">Remove</button></div></li>`;
     const er = E.rateExercise(ex);
-    const u = E.repUnit(ex);
+    const u = E.repLabel(ex);
     const sub = s.subbedFrom ? `<div class="subbed">↺ Swapped from ${esc(L[s.subbedFrom]?.name || s.subbedFrom)}</div>` : '';
     const miss = s.missing ? `<div class="subbed warn">No equipment match in this profile</div>` : '';
     return `<li class="slot">
@@ -462,7 +462,7 @@ function viewActive() {
     const ex = L[s.ex];
     if (!ex) return '';
     const er = E.rateExercise(ex);
-    const u = E.repUnit(ex);
+    const u = E.repLabel(ex);
     const workW = s.log.find(x => !x.warm && !x.sub && x.w !== '' && x.w != null)?.w || s.suggest?.weight;
     const wu = E.warmups(ex, +workW);
     const allDone = s.log.length && s.log.every(x => x.done);

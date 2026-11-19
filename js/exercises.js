@@ -166,6 +166,10 @@ export const EXERCISES = [
   X('ab_wheel', 'Ab Wheel Rollout', 'abs_anti', { abs: 1, lats: 0.25 }, ['bodyweight'], 5, 4, false, 0),
 ];
 
+// Done one side at a time: the reps column counts reps per side.
+const PER_SIDE = ['cable_lateral', 'single_arm_pulldown', 'db_row', 'bayesian_curl', 'bulgarian', 'walking_lunge', 'smith_split_squat', 'bw_split_squat', 'glute_bridge', 'db_calf', 'bw_calf'];
+EXERCISES.forEach(e => { if (PER_SIDE.includes(e.id)) e.perSide = true; });
+
 export const BY_ID = Object.fromEntries(EXERCISES.map(e => [e.id, e]));
 
 export const ALL_EQUIPMENT = Object.keys(EQUIPMENT);
