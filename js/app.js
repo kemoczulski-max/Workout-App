@@ -1101,7 +1101,7 @@ function finishWorkout() {
     id: a.id, date: a.date, name: a.name, programId: a.programId, dayId: a.dayId, profile: a.profile,
     startedAt: a.startedAt, finishedAt: Date.now(), updatedAt: Date.now(), minutes,
     rating: { overall: rating.overall, grade: rating.grade },
-    slots: a.slots.map(({ suggest, src, srcEx, ...s }) => ({ ...s, log: s.log.map(x => ({ w: x.w === '' || x.w == null ? null : +x.w, r: x.r === '' ? null : +x.r, done: x.done, ...(x.t && { t: x.t }), ...(x.sub && { sub: x.sub }), ...(x.warm && { warm: true }) })) })),
+    slots: a.slots.map(({ suggest, src, srcEx, stash, split, splitKeep, ...s }) => ({ ...s, log: s.log.map(x => ({ w: x.w === '' || x.w == null ? null : +x.w, r: x.r === '' ? null : +x.r, done: x.done, ...(x.t && { t: x.t }), ...(x.sub && { sub: x.sub }), ...(x.warm && { warm: true }) })) })),
   };
   state.sessions.push(session);
   if (a.programId && a.dayId && state.programs[a.programId]) {
@@ -1149,16 +1149,47 @@ function pickListHTML(sh) {
 function applySwap(where, i, newId, takenMark) {
   const slots = getSlots(where);
   const old = slots[i];
-  const next = { ...old, ex: newId, subbedFrom: old.subbedFrom || old.ex, missing: false };
-  if (next.subbedFrom === newId) delete next.subbedFrom;
+  if (where === 'active' && takenMark) state.active.taken.push(old.ex);
   if (where === 'active' && newId === old.subbedFrom) state.active.taken = state.active.taken.filter(id => id !== newId);
-  if (where === 'active') {
-    if (takenMark) state.active.taken.push(old.ex);
-    const doneSets = old.log.filter(x => x.done);
-    if (!doneSets.length) withSuggestion(next, currentWeek(state.active.programId));
-    else { next.log = old.log; next.suggest = null; }
+
+  // Undo: going back to the original restores it exactly as it was before the swap,
+  // including sets already logged, and removes the split-off copy if there is one.
+  if (where === 'active' && newId === old.subbedFrom && old.stash?.ex === newId) {
+    const prev = slots[i - 1];
+    const wasSplit = old.split && prev?.ex === newId && prev.splitKeep;
+    slots.splice(wasSplit ? i - 1 : i, wasSplit ? 2 : 1, old.stash);
+    persistFor(where);
+    return;
   }
-  slots[i] = next;
+
+  const next = { ...old, ex: newId, subbedFrom: old.subbedFrom || old.ex, missing: false };
+  delete next.stash; delete next.split; delete next.splitKeep;
+  if (next.subbedFrom === newId) delete next.subbedFrom;
+  if (where !== 'active') { slots[i] = next; persistFor(where); return; }
+
+  // Keep the very first original while nothing new has been logged (A → B → C, back to A).
+  const stash = old.stash && !old.log.some(x => x.done) ? old.stash : (({ stash: _s, ...o }) => JSON.parse(JSON.stringify(o)))(old);
+  const week = currentWeek(state.active.programId);
+  const done = old.log.filter(x => x.done);
+  if (!done.length) {
+    withSuggestion(next, week);
+    next.stash = stash;
+    if (old.split) next.split = true;
+    slots[i] = next;
+  } else {
+    // Mid-exercise swap: finished sets stay with the original exercise; the new one gets
+    // only the sets that were left, with a fresh log.
+    const keep = { ...old, log: done, sets: done.filter(x => !x.sub && !x.warm).length || done.length, splitKeep: true };
+    delete keep.group; delete keep.stash; delete keep.split;
+    const left = Math.max(1, old.log.filter(x => !x.done && !x.sub && !x.warm).length);
+    withSuggestion(next, week);
+    while (next.log.length < left) next.log.push({ w: next.suggest?.weight ?? '', r: '', done: false });
+    next.log = next.log.slice(0, left);
+    next.sets = left;
+    next.stash = stash;
+    next.split = true;
+    slots.splice(i, 1, keep, next);
+  }
   persistFor(where);
 }
 
