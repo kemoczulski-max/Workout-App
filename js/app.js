@@ -850,7 +850,7 @@ function viewSettings() {
     <label class="field mt">Code <input autocomplete="off" data-field="dropbox-code" placeholder="Paste the code Dropbox shows you"></label>
     <button class="btn sm primary" data-act="dropbox-finish">2. Finish connecting</button>`}
   </section>
-  <p class="muted small center">App version ${esc(appVersion.replace('lift-', '') || '?')}</p>
+  <p class="muted small center">App version ${esc(appVersion.replace('lift-', '') || '?')} · <button class="link-btn" data-act="force-update">Force update</button></p>
   <section class="card">
     <div class="card-head"><h2>Data</h2></div>
     <div class="row-btns">
@@ -1503,6 +1503,14 @@ const actions = {
   discard: () => { if (confirm('Discard this workout? Logged sets will be lost.')) { state.active = null; save({ sync: false }); keepAwake(false); render(); } },
   'timer-add': el => { if (state.active?.timerEnd) { state.active.timerEnd += +el.dataset.s * 1000; state.active.timerTotal += +el.dataset.s; tickTimer(); } },
   'rest-alert-ok': () => hideRestAlert(),
+  // Drop the cached app files and the offline worker, then load the current version fresh.
+  // Workout data lives in local storage, not these caches, so it is kept.
+  'force-update': async () => {
+    save({ sync: false });
+    try { for (const r of await navigator.serviceWorker.getRegistrations()) await r.unregister(); } catch {}
+    try { for (const k of await caches.keys()) await caches.delete(k); } catch {}
+    location.replace(location.pathname + '?v=' + Date.now());
+  },
   'timer-skip': () => { if (state.active) { state.active.timerEnd = null; save({ sync: false }); tickTimer(); } },
   // build
   'b-focus': el => { ui.build.focus = el.dataset.k; ui.build.muscles = [...E.FOCUS[el.dataset.k]]; ui.build.slots = null; render(); },
