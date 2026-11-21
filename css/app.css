@@ -315,3 +315,22 @@ textarea.full { resize: vertical; font-size: 14px; }
 .in-grp.grp-last { border-bottom: 2px solid var(--g) !important; border-radius: 0 0 14px 14px !important; margin-bottom: 14px !important; }
 .slots .in-grp { padding-left: 12px; padding-right: 12px; }
 .slots .grp-head { margin-top: 10px; }
+
+/* Lift history sheet */
+.lift-stats { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 8px 0 10px; }
+.lift-stats > div { background: var(--card-2, rgba(255,255,255,.04)); border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; }
+.lift-stats span { display: block; font-size: 12px; color: var(--muted); }
+.lift-stats b { display: block; font-size: 24px; font-variant-numeric: tabular-nums; }
+.lift-stats small { font-size: 12px; color: var(--muted); }
+.pct-table { display: grid; gap: 4px; }
+.pct-row { display: grid; grid-template-columns: 1fr 1fr 1fr; align-items: center; padding: 6px 12px; border-radius: 10px; border: 1px solid var(--line); background: transparent; color: inherit; font: inherit; text-align: left; font-variant-numeric: tabular-nums; }
+.pct-row b { font-size: 17px; }
+.pct-row.head { border: 0; padding: 0 12px; font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+.pct-row:not([disabled]):not(.head):active { background: var(--accent-dim); }
+.pct-row[disabled] { opacity: 1; }
+.pct-custom { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
+.pct-custom input { width: 90px; }
+.pct-custom span { flex: 1; }
+.hist-row { display: grid; grid-template-columns: 64px 1fr auto; gap: 8px; padding: 8px 0; border-bottom: 1px solid var(--line); font-size: 14px; font-variant-numeric: tabular-nums; }
+.hist-row > span:first-child { color: var(--muted); }
+.hist-row small { color: var(--muted); }

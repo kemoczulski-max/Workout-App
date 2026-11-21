@@ -112,6 +112,36 @@ function history(exId) {
   return out;
 }
 
+// ---------- lift history, estimated 1RM and % table ----------
+const loadStep = () => (unit() === 'kg' ? 2.5 : 5); // gym loads: nearest 5 lb / 2.5 kg
+const roundLoad = w => E.roundTo(w, loadStep());
+const bestSet = sets => sets.filter(x => x.w && x.r).reduce((b, x) => (!b || E.e1rm(x.w, x.r) > E.e1rm(b.w, b.r) ? x : b), null);
+function liftStats(exId) {
+  const hist = history(exId);
+  const today = [];
+  if (state.active) for (const sl of state.active.slots) if (sl.ex === exId) today.push(...sl.log.filter(x => x.done && x.w && x.r && !x.sub && !x.warm).map(x => ({ w: +x.w, r: +x.r })));
+  const lastSets = today.length ? today : hist[0]?.sets || [];
+  const top = bestSet(lastSets);
+  const allTop = [lastSets, ...hist.map(h => h.sets)].map(bestSet).filter(Boolean).reduce((b, x) => (!b || E.e1rm(x.w, x.r) > E.e1rm(b.w, b.r) ? x : b), null);
+  return {
+    hist, today,
+    e1rm: top ? E.e1rm(top.w, top.r) : 0, from: top, fromDate: today.length ? 'today' : hist[0]?.date,
+    best: allTop ? E.e1rm(allTop.w, allTop.r) : 0, bestFrom: allTop,
+  };
+}
+const PCTS = [100, 95, 90, 85, 80, 75, 70, 65, 60, 55, 50];
+const repsAt = p => Math.max(1, Math.round(30 * (100 / p - 1))); // Epley, inverted
+const fmtDate = d => (d === 'today' ? 'today' : new Date(d + 'T12:00').toLocaleDateString(undefined, { month: 'short', day: 'numeric' }));
+
+// Put a weight in set j and carry it to later unfinished sets that were empty or matched the old weight.
+function applyWeight(i, j, w) {
+  const log = state.active.slots[i].log;
+  const old = log[j].w;
+  log[j].w = w;
+  log.forEach((x, k) => { if (k > j && !x.done && !x.warm && !x.sub && (x.w === '' || x.w == null || x.w === old)) x.w = w; });
+  save({ sync: false });
+}
+
 const videoLinks = name => [
   ['Jeff Nippard', `https://www.youtube.com/results?search_query=${encodeURIComponent(name + ' Jeff Nippard')}`],
   ['Athlean-X', `https://www.youtube.com/results?search_query=${encodeURIComponent(name + ' Athlean-X')}`],
@@ -398,6 +428,7 @@ function slotList(slots, where, { editable = true } = {}) {
       <div class="slot-actions">
         <button class="btn sm" data-act="swap" data-where="${where}" data-i="${i}">Swap</button>
         <button class="btn sm" data-act="taken" data-where="${where}" data-i="${i}" title="Machine busy: auto-substitute">Taken</button>
+        <button class="btn sm ghost" data-act="lift" data-ex="${ex.id}">History</button>
         <button class="btn sm ghost" data-act="video" data-ex="${ex.id}">Form</button>
         ${editable ? `<button class="icon" data-act="up" data-where="${where}" data-i="${i}" aria-label="Move up">↑</button>
         <button class="icon" data-act="remove-slot" data-where="${where}" data-i="${i}" aria-label="Remove">✕</button>` : ''}
@@ -537,6 +568,7 @@ function viewActive() {
       </div>
       <p class="muted small set-hint">Tap a set number to make it a warm-up or add a drop set, myo-reps, rest-pause and more.</p>
       <div class="row-btns">
+        <button class="btn sm ghost" data-act="lift" data-ex="${s.ex}" data-i="${i}">History · % 1RM</button>
         <button class="btn sm ghost" data-act="add-warm" data-i="${i}">+ Warm-up</button>
         <button class="btn sm ghost" data-act="add-set" data-i="${i}">+ Set</button>
         <button class="btn sm ghost" data-act="del-set" data-i="${i}">− Set</button>
@@ -868,11 +900,35 @@ function sheetHTML() {
     body = `<h2>Where are you training?</h2>
       ${Object.entries(state.profiles).map(([id, p]) => `<button class="btn block ${id === state.settings.activeProfile ? 'primary' : ''}" data-act="profile" data-id="${id}" data-close="1">${esc(p.name)} <span class="muted">· ${p.equip.length} items</span></button>`).join('')}
       <button class="btn block ghost" data-act="go-settings">Edit equipment</button>`;
+  } else if (sh.type === 'lift') {
+    const ex = L[sh.ex];
+    const st = liftStats(sh.ex);
+    const timed = E.repUnit(ex) !== 'reps';
+    const target = sh.i != null && state.active?.slots[sh.i]?.log[sh.j] ? sh.j : null;
+    const setNo = target != null ? workSets(state.active.slots[sh.i].log.slice(0, target + 1)).length : 0;
+    const u = unit();
+    body = `<h2>${esc(ex?.name || '')}</h2>
+      ${!timed && st.e1rm ? `
+      <div class="lift-stats">
+        <div><span>Estimated 1RM</span><b>${fmtW(roundLoad(st.e1rm))} ${u}</b><small>from ${fmtW(st.from.w)}×${st.from.r} ${fmtDate(st.fromDate)}</small></div>
+        <div><span>Best ever</span><b>${fmtW(roundLoad(st.best))} ${u}</b><small>${fmtW(st.bestFrom.w)}×${st.bestFrom.r}</small></div>
+      </div>
+      ${target != null ? `<p class="muted small">Tap a row to put that weight in <b>set ${setNo}</b> and the sets after it. Rounded to the nearest ${loadStep()} ${u}.</p>` : `<p class="muted small">Weights rounded to the nearest ${loadStep()} ${u}. Rep counts are what that load should allow to failure.</p>`}
+      <div class="pct-table">
+        <div class="pct-row head"><span>% 1RM</span><span>${u}</span><span>~Max reps</span></div>
+        ${PCTS.map(p => { const w = roundLoad(st.e1rm * p / 100); return `<button class="pct-row" ${target != null ? `data-act="pct-apply" data-w="${w}"` : 'disabled'}><span>${p}%</span><b>${fmtW(w)}</b><span>${repsAt(p)}</span></button>`; }).join('')}
+      </div>
+      <div class="pct-custom"><input inputmode="decimal" data-field="pct-custom" value="${esc(sh.pct ?? '')}" placeholder="Other %"><span>% = <b id="pct-out">${sh.pct ? fmtW(roundLoad(st.e1rm * sh.pct / 100)) + ' ' + u : '—'}</b></span>${target != null ? '<button class="btn sm primary" data-act="pct-apply" data-custom="1">Use</button>' : ''}</div>`
+      : `<p class="muted">${timed ? 'This exercise is timed, so there is no 1RM. History is below.' : 'No weighted sets logged yet. Finish a set with weight and reps and the estimate appears here.'}</p>`}
+      <div class="eyebrow mt">History</div>
+      ${st.today.length ? `<div class="hist-row"><span>Today</span><span>${st.today.map(x => `${fmtW(x.w)}×${x.r}`).join(', ')}</span></div>` : ''}
+      ${st.hist.length ? st.hist.slice(0, 10).map(h => { const b = bestSet(h.sets); return `<div class="hist-row"><span>${fmtDate(h.date)}</span><span>${h.sets.map(x => `${x.w == null ? 'BW' : fmtW(x.w)}×${x.r}`).join(', ')}</span>${b && !timed ? `<small>e1RM ${fmtW(roundLoad(E.e1rm(b.w, b.r)))}</small>` : ''}</div>`; }).join('') : (st.today.length ? '' : '<p class="muted small">Not done yet.</p>')}`;
   } else if (sh.type === 'ex-menu') {
     const s = state.active.slots[sh.i];
     body = `<h2>${esc(L[s.ex]?.name)}</h2>
       <button class="btn block" data-act="taken" data-where="active" data-i="${sh.i}">Machine taken: auto-substitute</button>
       <button class="btn block" data-act="swap" data-where="active" data-i="${sh.i}">Choose a substitute</button>
+      <button class="btn block" data-act="lift" data-ex="${s.ex}" data-i="${sh.i}">History, 1RM and % table</button>
       <button class="btn block" data-act="video" data-ex="${s.ex}">Form videos</button>
       <button class="btn block" data-act="up" data-where="active" data-i="${sh.i}" data-close="1">Move up</button>
       <button class="btn block danger-ghost" data-act="remove-slot" data-where="active" data-i="${sh.i}" data-close="1">Remove exercise</button>`;
@@ -882,6 +938,7 @@ function sheetHTML() {
     const subs = (() => { let k = sh.j + 1, c = 0; while (s.log[k]?.sub) { k++; c++; } return c; })();
     const cur = E.techOf(x.t);
     body = `<h2>${x.warm ? 'Warm-up set' : `Set ${workSets(s.log.slice(0, sh.j + 1)).length}`} · ${esc(L[s.ex]?.name || '')}</h2>
+      ${!x.sub ? `<button class="btn block primary" data-act="lift" data-ex="${s.ex}" data-i="${sh.i}" data-j="${sh.j}">Set weight from % of 1RM</button>` : ''}
       <p class="muted small">Pick a technique for this set. Extra rows (drops, mini-sets, partials) appear after you check the set off, with the right rest timer.</p>
       <ul class="pick tech-pick">
         <li><button data-act="pick-tech" data-t="warm" class="${x.warm ? 'on' : ''}"><span class="pick-name"><b>Warm-up set</b><span class="muted">Not counted toward working sets, ratings, PRs or next-time load suggestions. Rest after it is capped at 60 sec.</span></span></button></li>
@@ -1284,6 +1341,28 @@ const actions = {
   taken: el => autoTaken(el.dataset.where, +el.dataset.i),
   video: el => openSheet({ type: 'video', id: el.dataset.ex }),
   'ex-menu': el => openSheet({ type: 'ex-menu', i: +el.dataset.i }),
+  lift: el => {
+    const i = el.dataset.i != null ? +el.dataset.i : null;
+    let j = el.dataset.j != null ? +el.dataset.j : null;
+    if (i != null && j == null) { // from the card: aim at the next unfinished working set
+      const log = state.active?.slots[i]?.log || [];
+      j = log.findIndex(x => !x.done && !x.sub && !x.warm);
+      if (j < 0) j = null;
+    }
+    openSheet({ type: 'lift', ex: el.dataset.ex, i: j == null ? null : i, j });
+  },
+  'pct-apply': el => {
+    const sh = ui.sheet;
+    let w = +el.dataset.w;
+    if (el.dataset.custom) {
+      const p = parseFloat(sh.pct);
+      if (!p) return toast('Enter a percentage.');
+      w = roundLoad(liftStats(sh.ex).e1rm * p / 100);
+    }
+    applyWeight(sh.i, sh.j, w);
+    closeSheet(); render();
+    toast(`${fmtW(w)} ${unit()} set.`);
+  },
   sets: el => {
     const s = editTarget(el.dataset.where, +el.dataset.i, 'sets');
     s.sets = Math.max(1, Math.min(10, s.sets + +el.dataset.d));
@@ -1497,6 +1576,11 @@ document.addEventListener('input', e => {
   else if (f === 'sheet-q') { ui.sheet.q = el.value; const pos = el.selectionStart; renderSheet(); const n = document.querySelector('[data-field="sheet-q"]'); n.focus(); n.setSelectionRange(pos, pos); }
   else if (f === 'import-text') ui.sheet.text = el.value;
   else if (f === 'rest-custom') ui.sheet.custom = el.value;
+  else if (f === 'pct-custom') {
+    ui.sheet.pct = el.value;
+    const p = parseFloat(el.value), out = document.getElementById('pct-out');
+    if (out) out.textContent = p ? `${fmtW(roundLoad(liftStats(ui.sheet.ex).e1rm * p / 100))} ${unit()}` : '—';
+  }
   else if (f === 'dropbox-key') setDropbox({ appKey: el.value.trim() });
   else if (f === 'push-url') setPush({ url: el.value.trim() });
 });
