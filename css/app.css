@@ -340,3 +340,10 @@ textarea.full { resize: vertical; font-size: 14px; }
 .pick-search { position: sticky; top: -10px; z-index: 1; background: var(--surface); padding: 6px 0 4px; margin: 0 0 4px; }
 .pick-search input[type="search"] { font-size: 16px; } /* 16px+ stops iOS zooming in on focus */
 .link-btn { background: none; border: 0; padding: 0; color: var(--accent); font: inherit; text-decoration: underline; }
+
+/* Unlogged sets check on Finish */
+.ul-ex { margin: 12px 0; padding-top: 10px; border-top: 1px solid var(--line); }
+.ul-ex > b { display: block; margin-bottom: 6px; }
+.ul-row { grid-template-columns: 34px 1fr 1fr auto !important; }
+.ul-btns { display: flex; gap: 6px; align-items: center; }
+.ul-btns .check { width: 44px; }

@@ -963,6 +963,33 @@ function sheetHTML() {
       <button class="btn primary block" data-act="copy-export">Copy to clipboard</button>
       <button class="btn block" data-act="download-export">Download file</button>
       ${dropbox().refresh ? '<button class="btn block" data-act="dropbox-export">Save to Dropbox</button>' : ''}`;
+  } else if (sh.type === 'unlogged') {
+    const a = state.active;
+    const rows = unloggedSets();
+    const byEx = [];
+    rows.forEach(({ i, j }) => { let g = byEx.find(b => b.i === i); if (!g) byEx.push(g = { i, js: [] }); g.js.push(j); });
+    body = `<h2>${rows.length} set${rows.length > 1 ? 's' : ''} not logged</h2>
+      <p class="muted small">Log what you did or skip what you didn't. Blank boxes use the number shown in grey.</p>
+      ${byEx.map(({ i, js }) => {
+        const s = a.slots[i];
+        const u = E.repLabel(L[s.ex]);
+        return `<div class="ul-ex"><b>${esc(L[s.ex]?.name || s.ex)}</b>
+          <div class="set-row head ul-row"><span>Set</span><span>${unit()}</span><span>${esc(u[0].toUpperCase() + u.slice(1))}</span><span></span></div>
+          ${js.map(j => {
+            const x = s.log[j];
+            const ph = unloggedPlaceholders(s, j);
+            const n = x.warm ? 'W' : workSets(s.log.slice(0, j + 1)).length;
+            return `<div class="set-row ul-row">
+              <span class="set-n">${n}</span>
+              <input inputmode="decimal" data-field="w" data-i="${i}" data-j="${j}" value="${x.w ?? ''}" placeholder="${ph.w === '' ? '—' : fmtW(ph.w)}">
+              <input inputmode="numeric" data-field="r" data-i="${i}" data-j="${j}" value="${x.r ?? ''}" placeholder="${ph.r}">
+              <span class="ul-btns"><button class="check" data-act="ul-done" data-i="${i}" data-j="${j}" aria-label="Log set">✓</button><button class="btn sm ghost" data-act="ul-skip" data-i="${i}" data-j="${j}">Skip</button></span>
+            </div>`;
+          }).join('')}</div>`;
+      }).join('')}
+      <button class="btn block primary mt" data-act="ul-all-done">Log all ${rows.length} as shown and finish</button>
+      <button class="btn block" data-act="ul-all-skip">Skip all ${rows.length} and finish</button>
+      <button class="btn block ghost" data-act="close">Back to workout</button>`;
   } else if (sh.type === 'finish') {
     const r = sh.rating;
     body = `<h2>Workout complete</h2>
@@ -1081,6 +1108,43 @@ function withSuggestion(slot, week) {
     idx.forEach(j => { slot.log[j].t = it.t; if (it.pct) slot.log[j].pct = it.pct; });
   }
   return slot;
+}
+
+// Sets not checked off yet: main and warm-up rows. Unchecked extra rows (drops, myo
+// mini-sets) are optional and are dropped quietly on finish.
+function unloggedSets() {
+  const out = [];
+  state.active.slots.forEach((s, i) => s.log.forEach((x, j) => { if (!x.done && !x.sub) out.push({ i, j }); }));
+  return out;
+}
+// Fill a row from what is shown (typed value, else the suggestion) and mark it done.
+function logRow(i, j) {
+  const s = state.active.slots[i], x = s.log[j];
+  const ph = unloggedPlaceholders(s, j);
+  if (x.w === '' || x.w == null) x.w = ph.w;
+  if (x.r === '' || x.r == null) x.r = ph.r;
+  if (!x.r) return false;
+  x.done = true;
+  return true;
+}
+function unloggedPlaceholders(s, j) {
+  const x = s.log[j];
+  const prev = s.log.slice(0, j).reverse().find(p => p.done && !p.sub && !!p.warm === !!x.warm && p.w !== '' && p.w != null);
+  if (x.warm) {
+    const wu = E.warmups(lib()[s.ex], +(s.log.find(y => !y.warm && !y.sub && y.w !== '' && y.w != null)?.w || s.suggest?.weight));
+    const k = s.log.slice(0, j).filter(y => y.warm).length;
+    return { w: prev?.w ?? wu[k]?.w ?? '', r: prev?.r ?? wu[k]?.r ?? '' };
+  }
+  return { w: prev?.w ?? s.suggest?.weight ?? '', r: prev?.r ?? s.suggest?.reps ?? '' };
+}
+function dropOptionalRows() {
+  for (const s of state.active.slots) s.log = s.log.filter(x => x.done || !x.sub);
+}
+function tryFinish() {
+  if (unloggedSets().length) { openSheet({ type: 'unlogged' }); return; }
+  closeSheet();
+  dropOptionalRows();
+  finishWorkout();
 }
 
 function finishWorkout() {
@@ -1499,7 +1563,30 @@ const actions = {
   'add-set': el => { const s = state.active.slots[+el.dataset.i]; const last = workSets(s.log).pop(); s.log.push({ w: last?.w ?? '', r: '', done: false }); save({ sync: false }); render(); },
   'del-set': el => { const s = state.active.slots[+el.dataset.i]; if (s.log.length > 1) { if (s.log[s.log.length - 1].sub) s.log.pop(); else if (workSets(s.log).length > 1 || s.log[s.log.length - 1].warm) s.log.pop(); } save({ sync: false }); render(); },
   'toggle-rating': () => { ui.showRating = !ui.showRating; render(); },
-  finish: () => finishWorkout(),
+  finish: () => tryFinish(),
+  'ul-done': el => {
+    if (!logRow(+el.dataset.i, +el.dataset.j)) return toast('Enter the reps first.');
+    save({ sync: false });
+    if (!unloggedSets().length) return tryFinish();
+    renderSheet(); render();
+  },
+  'ul-skip': el => {
+    state.active.slots[+el.dataset.i].log.splice(+el.dataset.j, 1);
+    save({ sync: false });
+    if (!unloggedSets().length) return tryFinish();
+    renderSheet(); render();
+  },
+  'ul-all-done': () => {
+    const left = unloggedSets().filter(({ i, j }) => !logRow(i, j));
+    save({ sync: false });
+    if (left.length) { renderSheet(); render(); return toast('Some sets need reps. Fill them in or skip them.'); }
+    tryFinish();
+  },
+  'ul-all-skip': () => {
+    for (const s of state.active.slots) s.log = s.log.filter(x => x.done);
+    save({ sync: false });
+    tryFinish();
+  },
   discard: () => { if (confirm('Discard this workout? Logged sets will be lost.')) { state.active = null; save({ sync: false }); keepAwake(false); render(); } },
   'timer-add': el => { if (state.active?.timerEnd) { state.active.timerEnd += +el.dataset.s * 1000; state.active.timerTotal += +el.dataset.s; tickTimer(); } },
   'rest-alert-ok': () => hideRestAlert(),
@@ -1624,8 +1711,7 @@ document.addEventListener('input', e => {
       // Carry the new weight down to later, unfinished sets that matched the old value.
       if (k > j && !x.done && !x.warm && (x.w === '' || x.w == null || String(x.w) === String(old))) {
         x.w = el.value;
-        const inp = document.querySelector(`[data-field="w"][data-i="${i}"][data-j="${k}"]`);
-        if (inp) inp.value = el.value;
+        document.querySelectorAll(`[data-field="w"][data-i="${i}"][data-j="${k}"]`).forEach(inp => { inp.value = el.value; });
       }
     });
     save({ sync: false });
