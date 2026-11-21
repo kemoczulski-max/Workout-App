@@ -321,7 +321,41 @@ function ratingCard(r, { title = 'Workout rating', compact = false } = {}) {
 
 const ALL_SETS_TECH = new Set(['eccentric', 'pause', 'onehalf']);
 const restText = s => (s.rest ? `${s.rest}s rest` : 'no rest, go to next');
-const groupTag = s => (s.group ? `<span class="chip grp">${esc(s.group)}</span> ` : '');
+// ---------- supersets and circuits ----------
+// Consecutive slots whose group labels share a prefix ("A1", "A2" or "Abs 1", "Abs 2"...) form one block.
+const groupKey = g => String(g || '').replace(/\s*\d+$/, '').trim();
+const groupColor = k => (/^abs?$/i.test(k) ? 'g-abs' : `g-${(k.toUpperCase().charCodeAt(0) - 65) % 4}`);
+function groupInfo(slots, i) {
+  const k = groupKey(slots[i]?.group);
+  if (!k) return null;
+  let a = i, b = i;
+  while (a > 0 && groupKey(slots[a - 1].group) === k) a--;
+  while (b < slots.length - 1 && groupKey(slots[b + 1].group) === k) b++;
+  if (a === b) return null; // a lone labeled slot is not a block
+  const size = b - a + 1;
+  const isAbs = /^abs?$/i.test(k);
+  return {
+    key: k, first: a, last: b, size, color: groupColor(k),
+    circuit: size >= 3 || isAbs,
+    name: isAbs ? 'Ab circuit' : size >= 3 ? `Circuit ${k}` : `Superset ${k}`,
+    rounds: Math.max(...slots.slice(a, b + 1).map(x => x.sets || (x.log ? workSets(x.log).length : 0))),
+    rest: slots[b].rest,
+  };
+}
+const groupTag = s => (s.group ? `<span class="chip grp ${groupColor(groupKey(s.group))}">${esc(s.group)}</span> ` : '');
+function groupHead(g, slots, tag = 'li') {
+  if (!g) return '';
+  const how = g.circuit
+    ? `${g.size} exercises back to back · ${g.rounds} round${g.rounds > 1 ? 's' : ''} · ${g.rest ? `${g.rest}s` : 'no'} rest between rounds`
+    : `Alternate ${slots[g.first].group} and ${slots[g.last].group} · rest ${g.rest ? `${g.rest}s` : 'none'} after ${slots[g.last].group}`;
+  let prog = '';
+  if (slots[g.first].log) {
+    const done = Math.min(...slots.slice(g.first, g.last + 1).map(x => workSets(x.log).filter(y => y.done).length));
+    prog = done >= g.rounds ? '<span class="grp-prog done">Done</span>' : `<span class="grp-prog">Round ${done + 1} of ${g.rounds}</span>`;
+  }
+  return `<${tag} class="grp-head ${g.color}"><div><b>${g.circuit ? '⟳' : '⇄'} ${esc(g.name)}</b>${prog}</div><span>${how}</span></${tag}>`;
+}
+const grpClass = (g, i) => (g ? `in-grp ${g.color} ${i === g.first ? 'grp-first' : ''} ${i === g.last ? 'grp-last' : ''}` : '');
 // Technique and coaching cues carried over from an imported program.
 function slotExtras(s) {
   const T = E.techOf(s.intensity?.t);
@@ -341,7 +375,8 @@ function slotList(slots, where, { editable = true } = {}) {
     const u = E.repLabel(ex);
     const sub = s.subbedFrom ? `<div class="subbed">↺ Swapped from ${esc(L[s.subbedFrom]?.name || s.subbedFrom)}</div>` : '';
     const miss = s.missing ? `<div class="subbed warn">No equipment match in this profile</div>` : '';
-    return `<li class="slot">
+    const g = groupInfo(slots, i);
+    return `${g && i === g.first ? groupHead(g, slots) : ''}<li class="slot ${grpClass(g, i)}">
       <div class="slot-main">
         <div class="slot-title">${groupTag(s)}<span class="chip ${gradeClass(er.grade)}">${er.grade}</span> <b>${esc(ex.name)}</b></div>
         <div class="slot-meta">
@@ -468,8 +503,9 @@ function viewActive() {
     const wu = E.warmups(ex, +workW);
     const allDone = s.log.length && s.log.every(x => x.done);
     let n = 0;
-    return `
-    <section class="card ex-card ${allDone ? 'done' : ''}" id="ex-${i}">
+    const g = groupInfo(a.slots, i);
+    return `${g && i === g.first ? groupHead(g, a.slots, 'div') : ''}
+    <section class="card ex-card ${allDone ? 'done' : ''} ${grpClass(g, i)}" id="ex-${i}">
       <div class="ex-head">
         <div>
           <div class="slot-title">${groupTag(s)}<span class="chip ${gradeClass(er.grade)}">${er.grade}</span> <b>${esc(ex.name)}</b></div>
@@ -1501,6 +1537,22 @@ function upgradeDefaultProgram() {
   save();
   setTimeout(() => toast('Program updated: more volume on every day.'), 600);
 }
+
+// Tapping a weight or reps box selects its number, so typing replaces it (135 → 145, not 14535).
+document.addEventListener('focusin', e => {
+  const el = e.target;
+  if (!el.matches?.('input[data-field="w"], input[data-field="r"]') || !el.value) return;
+  const sel = () => { try { el.setSelectionRange(0, el.value.length); } catch {} };
+  sel();
+  setTimeout(sel, 0); // iOS places the caret after focus; select again once it has
+});
+// iOS can drop the selection on the tap's mouseup; keep it for that first tap.
+document.addEventListener('mouseup', e => {
+  const el = e.target;
+  if (el.matches?.('input[data-field="w"], input[data-field="r"]') && el.dataset.justFocused) e.preventDefault();
+  if (el.dataset) delete el.dataset.justFocused;
+}, true);
+document.addEventListener('focusin', e => { if (e.target.matches?.('input[data-field="w"], input[data-field="r"]')) e.target.dataset.justFocused = '1'; }, true);
 
 // ================= boot =================
 upgradeDefaultProgram();
