@@ -1162,6 +1162,15 @@ function applySwap(where, i, newId, takenMark) {
     return;
   }
 
+  // Swaps made before undo existed carried the log over: going back just renames the exercise.
+  if (where === 'active' && newId === old.subbedFrom && !old.stash) {
+    const back = { ...old, ex: newId, missing: false };
+    delete back.subbedFrom;
+    slots[i] = back;
+    persistFor(where);
+    return;
+  }
+
   const next = { ...old, ex: newId, subbedFrom: old.subbedFrom || old.ex, missing: false };
   delete next.stash; delete next.split; delete next.splitKeep;
   if (next.subbedFrom === newId) delete next.subbedFrom;
