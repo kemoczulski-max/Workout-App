@@ -24,7 +24,7 @@ export const EQUIPMENT = {
   cable_row: 'Seated Cable Row', chest_supported_row: 'Chest-Supported Row Machine',
   preacher: 'Preacher Bench', calf_machine: 'Calf Raise Machine', back_extension: '45° Back Extension',
   hip_adductor: 'Hip Adductor Machine', hip_abductor: 'Hip Abductor Machine', assisted_pullup: 'Assisted Pull-up Machine',
-  band: 'Resistance Bands',
+  band: 'Resistance Bands', iso_lateral: 'Iso-Lateral Plate-Loaded Machines (Hammer Strength)',
 };
 
 export const PATTERNS = {
@@ -165,6 +165,22 @@ export const EXERCISES = [
   X('ab_crunch', 'Crunch', 'abs_flexion', { abs: 1 }, ['bodyweight'], 2, 3, false, 0),
   X('ab_wheel', 'Ab Wheel Rollout', 'abs_anti', { abs: 1, lats: 0.25 }, ['bodyweight'], 5, 4, false, 0),
   X('pallof_press', 'Pallof Press', 'abs_anti', { abs: 1 }, ['cable'], 2, 5, false, 2.5),
+
+  // ---- Iso-lateral plate-loaded machines (Hammer Strength style): each arm/leg moves its own lever.
+  X('iso_bench', 'Iso-Lateral Chest Press', 'horizontal_press', { chest: 1, triceps: 0.5, front_delts: 0.5 }, ['iso_lateral'], 4, 5, true, 10),
+  X('iso_wide_chest', 'Iso-Lateral Wide Chest Press', 'horizontal_press', { chest: 1, front_delts: 0.5, triceps: 0.25 }, ['iso_lateral'], 4, 5, true, 10),
+  X('iso_decline', 'Iso-Lateral Decline Press', 'horizontal_press', { chest: 1, triceps: 0.5, front_delts: 0.25 }, ['iso_lateral'], 3, 4, true, 10),
+  X('iso_incline', 'Iso-Lateral Incline Press', 'incline_press', { chest: 1, front_delts: 0.75, triceps: 0.5 }, ['iso_lateral'], 4, 5, true, 10),
+  X('iso_super_incline', 'Iso-Lateral Super Incline Press', 'incline_press', { front_delts: 1, chest: 0.75, triceps: 0.5 }, ['iso_lateral'], 3, 4, true, 10),
+  X('iso_shoulder_press', 'Iso-Lateral Shoulder Press', 'vertical_press', { front_delts: 1, side_delts: 0.5, triceps: 0.5 }, ['iso_lateral'], 3, 5, true, 10),
+  X('iso_pulldown', 'Iso-Lateral Front Lat Pulldown', 'vertical_pull', { lats: 1, biceps: 0.5, upper_back: 0.5 }, ['iso_lateral'], 4, 5, true, 10),
+  X('iso_high_row', 'Iso-Lateral High Row', 'vertical_pull', { lats: 1, upper_back: 0.75, biceps: 0.5, rear_delts: 0.25 }, ['iso_lateral'], 4, 5, true, 10),
+  X('iso_row', 'Iso-Lateral Row', 'horizontal_pull', { upper_back: 1, lats: 0.75, rear_delts: 0.5, biceps: 0.5 }, ['iso_lateral'], 4, 5, true, 10),
+  X('iso_low_row', 'Iso-Lateral Low Row', 'horizontal_pull', { lats: 1, upper_back: 0.75, biceps: 0.5, rear_delts: 0.25 }, ['iso_lateral'], 4, 5, true, 10),
+  X('iso_dy_row', 'Iso-Lateral D.Y. Row', 'horizontal_pull', { lats: 1, upper_back: 0.5, biceps: 0.5 }, ['iso_lateral'], 4, 5, true, 10),
+  X('iso_leg_press', 'Iso-Lateral Leg Press', 'leg_press', { quads: 1, glutes: 0.5, adductors: 0.5 }, ['iso_lateral'], 4, 4, true, 20),
+  X('iso_leg_ext', 'Iso-Lateral Leg Extension', 'leg_ext', { quads: 1 }, ['iso_lateral'], 3, 5, false, 10),
+  X('iso_kneeling_curl', 'Iso-Lateral Kneeling Leg Curl', 'leg_curl', { hamstrings: 1 }, ['iso_lateral'], 3, 5, false, 5),
 ];
 
 // Done one side at a time: the reps column counts reps per side.

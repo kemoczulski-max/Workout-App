@@ -1801,7 +1801,21 @@ document.addEventListener('mouseup', e => {
 }, true);
 document.addEventListener('focusin', e => { if (e.target.matches?.('input[data-field="w"], input[data-field="r"]')) e.target.dataset.justFocused = '1'; }, true);
 
+// New equipment types: add them once to the Commercial Gym profile so the new exercises show up.
+function addNewEquipment() {
+  const done = state.settings.equipAdded || [];
+  const gym = state.profiles.gym;
+  let changed = false;
+  for (const id of ['iso_lateral']) {
+    if (done.includes(id)) continue;
+    if (gym && !gym.equip.includes(id)) gym.equip.push(id);
+    done.push(id); changed = true;
+  }
+  if (changed) { state.settings.equipAdded = done; ui.preview = null; save(); }
+}
+
 // ================= boot =================
+addNewEquipment();
 upgradeDefaultProgram();
 migrateCalendar();
 render({ keepScroll: false });
