@@ -1,5 +1,5 @@
 // Offline support: cache the app shell, serve it network-first so updates land on next open.
-const CACHE = 'lift-v19';
+const CACHE = 'lift-v20';
 const SHELL = [
   './', './index.html', './css/app.css', './manifest.webmanifest',
   './js/app.js', './js/engine.js', './js/exercises.js', './js/programs.js', './js/store.js',
@@ -7,7 +7,8 @@ const SHELL = [
 ];
 
 self.addEventListener('install', e => {
-  e.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL)).then(() => self.skipWaiting()));
+  // cache: 'reload' skips the browser's HTTP cache, so a new version never caches old files.
+  e.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL.map(u => new Request(u, { cache: 'reload' })))).then(() => self.skipWaiting()));
 });
 
 self.addEventListener('activate', e => {
@@ -18,7 +19,8 @@ self.addEventListener('fetch', e => {
   const url = new URL(e.request.url);
   if (e.request.method !== 'GET' || url.origin !== location.origin) return; // never cache GitHub API calls
   e.respondWith(
-    fetch(e.request)
+    // no-store: always ask GitHub for the current file instead of a copy up to 10 min old.
+    fetch(e.request, { cache: 'no-store' })
       .then(res => {
         const copy = res.clone();
         caches.open(CACHE).then(c => c.put(e.request, copy));

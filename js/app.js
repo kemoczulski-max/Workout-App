@@ -850,6 +850,7 @@ function viewSettings() {
     <label class="field mt">Code <input autocomplete="off" data-field="dropbox-code" placeholder="Paste the code Dropbox shows you"></label>
     <button class="btn sm primary" data-act="dropbox-finish">2. Finish connecting</button>`}
   </section>
+  <p class="muted small center">App version ${esc(appVersion.replace('lift-', '') || '?')}</p>
   <section class="card">
     <div class="card-head"><h2>Data</h2></div>
     <div class="row-btns">
@@ -988,7 +989,7 @@ function renderSheet() {
   const root = $('#sheet-root');
   const scrollEl = root.querySelector('.sheet');
   const sy = scrollEl?.scrollTop || 0;
-  root.innerHTML = sheetHTML();
+  root.innerHTML = sheetHTML(); fitSheet();
   document.body.classList.toggle('sheet-open', !!ui.sheet);
   const ns = root.querySelector('.sheet');
   if (ns) ns.scrollTop = sy;
@@ -1677,6 +1678,19 @@ function upgradeDefaultProgram() {
   setTimeout(() => toast('Program updated: more volume on every day.'), 600);
 }
 
+// Keep an open sheet sitting on top of the iPhone keyboard. iOS doesn't shrink fixed
+// elements for the keyboard; it scrolls the page instead, which makes the sheet jump.
+function fitSheet() {
+  const vv = window.visualViewport, el = document.querySelector('.sheet');
+  if (!vv || !el) return;
+  const kb = Math.max(0, window.innerHeight - vv.height - vv.offsetTop);
+  el.style.bottom = kb + 'px';
+  el.style.maxHeight = el.classList.contains('sheet-swap') || el.classList.contains('sheet-add') ? '' : Math.round(vv.height * 0.92) + 'px';
+  if (el.classList.contains('sheet-swap') || el.classList.contains('sheet-add')) el.style.height = Math.round(Math.min(vv.height * 0.92, window.innerHeight * 0.86)) + 'px';
+}
+window.visualViewport?.addEventListener('resize', fitSheet);
+window.visualViewport?.addEventListener('scroll', fitSheet);
+
 // Tapping a weight or reps box selects its number, so typing replaces it (135 → 145, not 14535).
 document.addEventListener('focusin', e => {
   const el = e.target;
@@ -1699,4 +1713,21 @@ migrateCalendar();
 render({ keepScroll: false });
 if (state.active) keepAwake(true);
 if (gist().token || dropbox().refresh) syncNow().then(() => { upgradeDefaultProgram(); migrateCalendar(); ui.preview = null; render(); }).catch(() => {});
-if ('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js').catch(() => {});
+// Updates: check for a new version each time the app comes to the front, and reload once
+// when it takes over, so a new version applies on the next open instead of the one after.
+if ('serviceWorker' in navigator) {
+  const hadController = !!navigator.serviceWorker.controller;
+  navigator.serviceWorker.register('./sw.js', { updateViaCache: 'none' }).then(reg => {
+    document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') reg.update().catch(() => {}); });
+  }).catch(() => {});
+  let reloaded = false;
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (!hadController || reloaded) return;
+    reloaded = true;
+    save({ sync: false }); // the workout in progress is in local storage, so a reload is safe
+    location.reload();
+  });
+}
+// Which version is running, shown in Setup.
+let appVersion = '';
+caches?.keys?.().then(k => { appVersion = k.find(x => x.startsWith('lift-')) || ''; }).catch(() => {});
