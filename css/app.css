@@ -334,3 +334,8 @@ textarea.full { resize: vertical; font-size: 14px; }
 .hist-row { display: grid; grid-template-columns: 64px 1fr auto; gap: 8px; padding: 8px 0; border-bottom: 1px solid var(--line); font-size: 14px; font-variant-numeric: tabular-nums; }
 .hist-row > span:first-child { color: var(--muted); }
 .hist-row small { color: var(--muted); }
+
+/* Swap / add sheet: fixed height so the panel doesn't grow and shrink as results change while typing. */
+.sheet-swap, .sheet-add { height: 86vh; height: 86svh; overscroll-behavior: contain; }
+.pick-search { position: sticky; top: -10px; z-index: 1; background: var(--surface); padding: 6px 0 4px; margin: 0 0 4px; }
+.pick-search input[type="search"] { font-size: 16px; } /* 16px+ stops iOS zooming in on focus */

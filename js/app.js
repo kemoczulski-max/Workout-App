@@ -868,29 +868,16 @@ function sheetHTML() {
   const L = lib();
   let body = '';
   if (sh.type === 'swap' || sh.type === 'add') {
-    const slots = getSlots(sh.where) || [];
-    const cur = sh.type === 'swap' ? slots[sh.i] : null;
-    const taken = sh.where === 'active' ? state.active.taken : [];
-    const c = ctx(taken);
-    const used = usedIds(sh.where);
-    const q = (sh.q || '').toLowerCase();
-    let list;
-    if (cur && L[cur.ex] && !q) {
-      list = E.substitutes(cur.ex, L, c, used, 12).map(r => ({ ex: r.ex, sub: `${Math.round(r.sim * 100)}% match` }));
-    } else {
-      list = Object.values(L)
-        .filter(e => !used.has(e.id) && (sh.all || E.isAvailable(e, c)) && (!q || e.name.toLowerCase().includes(q) || Object.keys(e.muscles).some(m => MUSCLES[m].toLowerCase().includes(q))))
-        .sort((a, b) => E.quality(b) - E.quality(a)).slice(0, 40)
-        .map(e => ({ ex: e, sub: Object.entries(e.muscles).filter(([, w]) => w >= 1).map(([m]) => MUSCLES[m]).join(', ') }));
-    }
+    const cur = sh.type === 'swap' ? (getSlots(sh.where) || [])[sh.i] : null;
+    const orig = cur?.subbedFrom && L[cur.subbedFrom];
     body = `
       <h2>${sh.type === 'swap' ? `Swap ${esc(L[cur?.ex]?.name || '')}` : 'Add exercise'}</h2>
-      <input class="full" type="search" placeholder="Search by name or muscle" data-field="sheet-q" value="${esc(sh.q || '')}">
-      <label class="check-item inline"><input type="checkbox" data-field="sheet-all" ${sh.all ? 'checked' : ''}><span>Include equipment not in this profile</span></label>
-      <ul class="pick">${list.map(({ ex, sub }) => {
-        const er = E.rateExercise(ex);
-        return `<li><button data-act="pick-ex" data-id="${ex.id}"><span class="chip ${gradeClass(er.grade)}">${er.grade}</span><span class="pick-name"><b>${esc(ex.name)}</b><span class="muted">${esc(sub)} · stretch ${ex.len}/5 · SFR ${ex.sfr}/5</span></span></button></li>`;
-      }).join('') || '<li class="muted">No matches with this equipment.</li>'}</ul>`;
+      ${orig ? `<button class="btn block primary" data-act="pick-ex" data-id="${orig.id}">↺ Back to original: ${esc(orig.name)}</button>` : ''}
+      <div class="pick-search">
+        <input class="full" type="search" autocomplete="off" autocorrect="off" spellcheck="false" placeholder="Search all exercises by name or muscle" data-field="sheet-q" value="${esc(sh.q || '')}">
+        <label class="check-item inline"><input type="checkbox" data-field="sheet-all" ${sh.all ? 'checked' : ''}><span>Include equipment not in this profile</span></label>
+      </div>
+      <ul class="pick" id="pick-list">${pickListHTML(sh)}</ul>`;
   } else if (sh.type === 'video') {
     const ex = L[sh.id];
     body = `<h2>${esc(ex.name)}</h2>
@@ -982,7 +969,7 @@ function sheetHTML() {
       ${sh.prs.length ? `<ul class="notes">${sh.prs.map(p => `<li>New best: ${esc(p)}</li>`).join('')}</ul>` : ''}
       <button class="btn primary block" data-act="close">Done</button>`;
   }
-  return `<div class="scrim" data-act="close"></div><div class="sheet" role="dialog" aria-modal="true"><div class="grabber"></div><button class="icon sheet-x" data-act="close" aria-label="Close">✕</button>${body}</div>`;
+  return `<div class="scrim" data-act="close"></div><div class="sheet sheet-${sh.type}" role="dialog" aria-modal="true"><div class="grabber"></div><button class="icon sheet-x" data-act="close" aria-label="Close">✕</button>${body}</div>`;
 }
 
 // ================= render =================
@@ -1132,11 +1119,39 @@ function finishWorkout() {
   openSheet({ type: 'finish', rating, minutes, sets: done.reduce((n, s) => n + s.log.filter(x => x.done && !x.sub && !x.warm).length, 0), prs });
 }
 
+// Results for the swap / add sheet. Rendered on its own so typing in the search box only
+// replaces the list; redrawing the input would close the iPhone keyboard after one letter.
+function pickListHTML(sh) {
+  const L = lib();
+  const cur = sh.type === 'swap' ? (getSlots(sh.where) || [])[sh.i] : null;
+  const taken = sh.where === 'active' ? state.active.taken : [];
+  const c = ctx(taken);
+  const used = usedIds(sh.where);
+  if (cur?.subbedFrom) used.delete(cur.subbedFrom);
+  const q = (sh.q || '').trim().toLowerCase();
+  const words = q.split(/\s+/).filter(Boolean);
+  const hit = e => words.every(w => e.name.toLowerCase().includes(w) || Object.keys(e.muscles).some(m => MUSCLES[m].toLowerCase().includes(w)) || (PATTERNS[e.pattern] || '').toLowerCase().includes(w));
+  let list;
+  if (cur && L[cur.ex] && !q) {
+    list = E.substitutes(cur.ex, L, c, used, 12).map(r => ({ ex: r.ex, sub: `${Math.round(r.sim * 100)}% match` }));
+  } else {
+    list = Object.values(L)
+      .filter(e => e.id !== cur?.ex && !used.has(e.id) && (sh.all || e.id === cur?.subbedFrom || (q && E.isAvailable(e, ctx([]))) || E.isAvailable(e, c)) && (!q || hit(e)))
+      .sort((a, b) => E.quality(b) - E.quality(a)).slice(0, 40)
+      .map(e => ({ ex: e, sub: Object.entries(e.muscles).filter(([, w]) => w >= 1).map(([m]) => MUSCLES[m]).join(', ') }));
+  }
+  return list.map(({ ex, sub }) => {
+    const er = E.rateExercise(ex);
+    return `<li><button data-act="pick-ex" data-id="${ex.id}"><span class="chip ${gradeClass(er.grade)}">${er.grade}</span><span class="pick-name"><b>${esc(ex.name)}</b><span class="muted">${esc(sub)} · stretch ${ex.len}/5 · SFR ${ex.sfr}/5</span></span></button></li>`;
+  }).join('') || `<li class="muted">${q ? 'No matches. Try another word, or tick "Include equipment not in this profile".' : 'No matches with this equipment.'}</li>`;
+}
+
 function applySwap(where, i, newId, takenMark) {
   const slots = getSlots(where);
   const old = slots[i];
   const next = { ...old, ex: newId, subbedFrom: old.subbedFrom || old.ex, missing: false };
   if (next.subbedFrom === newId) delete next.subbedFrom;
+  if (where === 'active' && newId === old.subbedFrom) state.active.taken = state.active.taken.filter(id => id !== newId);
   if (where === 'active') {
     if (takenMark) state.active.taken.push(old.ex);
     const doneSets = old.log.filter(x => x.done);
@@ -1573,7 +1588,7 @@ document.addEventListener('input', e => {
   else if (f === 'profile-name') { profile().name = el.value; save(); }
   else if (f === 'gist-token') setGist({ token: el.value.trim() });
   else if (f === 'gist-id') setGist({ id: el.value.trim() });
-  else if (f === 'sheet-q') { ui.sheet.q = el.value; const pos = el.selectionStart; renderSheet(); const n = document.querySelector('[data-field="sheet-q"]'); n.focus(); n.setSelectionRange(pos, pos); }
+  else if (f === 'sheet-q') { ui.sheet.q = el.value; const ul = document.getElementById('pick-list'); if (ul) ul.innerHTML = pickListHTML(ui.sheet); }
   else if (f === 'import-text') ui.sheet.text = el.value;
   else if (f === 'rest-custom') ui.sheet.custom = el.value;
   else if (f === 'pct-custom') {
@@ -1597,7 +1612,7 @@ document.addEventListener('change', e => {
   else if (f === 'cycle-select') { state.cycleIdx = state.cycleIdx || {}; state.cycleIdx[program().id] = +el.value; ui.preview = null; save(); render(); }
   else if (f === 'day-focus') { program().days[+el.dataset.i].focus = el.value; save(); render(); }
   else if (f === 'progress-ex') { ui.progressEx = el.value; render(); }
-  else if (f === 'sheet-all') { ui.sheet.all = el.checked; renderSheet(); }
+  else if (f === 'sheet-all') { ui.sheet.all = el.checked; const ul = document.getElementById('pick-list'); if (ul) ul.innerHTML = pickListHTML(ui.sheet); else renderSheet(); }
   else if (f === 'import-target') { ui.sheet.target = el.value; }
   else if (f === 'rest-perm') { ui.sheet.perm = el.checked; }
   else if (f === 'intensity') {
