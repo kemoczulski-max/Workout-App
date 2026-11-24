@@ -1,5 +1,5 @@
 // Offline support: cache the app shell, serve it network-first so updates land on next open.
-const CACHE = 'lift-v24';
+const CACHE = 'lift-v25';
 const SHELL = [
   './', './index.html', './css/app.css', './manifest.webmanifest',
   './js/app.js', './js/engine.js', './js/exercises.js', './js/programs.js', './js/store.js',
@@ -42,8 +42,14 @@ self.addEventListener('push', e => {
 
 self.addEventListener('notificationclick', e => {
   e.notification.close();
-  e.waitUntil(self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(list => {
-    const c = list[0];
-    return c ? c.focus() : self.clients.openWindow('./');
-  }));
+  e.waitUntil((async () => {
+    // Focus the open app if there is one; otherwise open it. Errors are swallowed so a failed
+    // focus() can't leave the tap hanging.
+    try {
+      const list = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+      const c = list.find(x => 'focus' in x);
+      if (c) { await c.focus(); return; }
+    } catch {}
+    try { await self.clients.openWindow('./'); } catch {}
+  })());
 });

@@ -202,8 +202,8 @@ function nextSetText() {
   return 'All sets done. Finish the workout.';
 }
 
-function restOver() {
-  chime();
+function restOver({ quiet = false } = {}) {
+  if (!quiet) chime();
   const el = $('#rest-alert');
   $('#rest-alert-next').textContent = nextSetText();
   el.hidden = false;
@@ -231,11 +231,14 @@ function tickTimer() {
   const draw = () => {
     const left = Math.round((a.timerEnd - Date.now()) / 1000);
     if (left <= 0) {
+      // If the rest ended while the app was away (or the phone was locked), the lock-screen
+      // notification already alerted, so show the banner without starting audio on resume.
+      const late = Date.now() - a.timerEnd > 2000;
       bar.hidden = true;
       a.timerEnd = null;
       save({ sync: false });
       clearInterval(timerInt);
-      restOver();
+      restOver({ quiet: late });
       return;
     }
     $('#timer-time').textContent = `${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')}`;
@@ -308,7 +311,8 @@ async function keepAwake(on) {
   } catch {}
 }
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'visible') { if (state.active) keepAwake(true); tickTimer(); }
+  // Give iOS a moment to finish bringing the app back (e.g. from a notification tap) first.
+  if (document.visibilityState === 'visible') setTimeout(() => { if (state.active) keepAwake(true); tickTimer(); }, 300);
 });
 
 // ================= shared components =================
