@@ -1785,6 +1785,46 @@ function fitSheet() {
 window.visualViewport?.addEventListener('resize', fitSheet);
 window.visualViewport?.addEventListener('scroll', fitSheet);
 
+// iOS bug: after the keyboard closes (tap a weight/reps box, then tap away), the page can stay
+// scrolled/shrunk, so the fixed tab bar and rest timer sit mid-screen with content showing
+// below them. Nudge the scroll position and force the fixed layers to re-lay out.
+function resyncFixed() {
+  const vv = window.visualViewport;
+  if (document.activeElement?.matches?.('input, textarea, select')) return; // keyboard still up
+  if (vv && window.innerHeight - vv.height - vv.offsetTop > 80) return; // keyboard still animating
+  const y = window.scrollY;
+  window.scrollTo(0, y + 1);
+  window.scrollTo(0, y);
+  document.querySelectorAll('.tabs, .timer, .clock').forEach(el => {
+    const d = el.style.display;
+    el.style.display = 'none';
+    void el.offsetHeight; // force reflow
+    el.style.display = d;
+  });
+}
+const resyncSoon = () => { [60, 250, 600].forEach(ms => setTimeout(resyncFixed, ms)); };
+document.addEventListener('focusout', resyncSoon, true);
+window.visualViewport?.addEventListener('resize', resyncSoon);
+window.addEventListener('pageshow', resyncSoon);
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') resyncSoon(); });
+
+// iOS scrolls the page on its own when the keyboard opens, and with the fixed timer and tab
+// bar it can throw the page to the bottom. After it settles, put the tapped box back in the
+// middle of the visible area. Done a few times because iOS scrolls at its own pace.
+function centerField(el) {
+  const vv = window.visualViewport;
+  if (!vv || document.activeElement !== el) return;
+  const r = el.getBoundingClientRect();
+  const elY = r.top + r.height / 2 + window.scrollY;
+  const mid = vv.pageTop + vv.height / 2;
+  const delta = elY - mid;
+  if (Math.abs(delta) > 40) window.scrollBy(0, delta);
+}
+document.addEventListener('focusin', e => {
+  if (!e.target.matches?.('input[data-field="w"], input[data-field="r"]')) return;
+  [120, 350, 650].forEach(ms => setTimeout(() => centerField(e.target), ms));
+});
+
 // Tapping a weight or reps box selects its number, so typing replaces it (135 → 145, not 14535).
 document.addEventListener('focusin', e => {
   const el = e.target;
